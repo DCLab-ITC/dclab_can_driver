@@ -6,7 +6,8 @@ encoders sharing an ID (slot 0 = lower-numbered encoder, slot 1 = the other).
 The speed field is estimated here from successive positions. With
 v1_frames=true a DLC 8 frame is read as V1's (position, speed) instead.
 
-Parameters: encoder_ids ([first, last] pairs, default [100, 199]) and
+Parameters: encoder_ids ([first, last] pairs, default [100, 199, 250, 299]:
+encoders and the Motor Controller's channel feedback) and
 speed_filter_alpha (0 = raw difference, closer to 1 = smoother)."""
 
 from custom_messages.msg import EncoderFeedback
@@ -18,7 +19,7 @@ from .id_ranges import declare_ranges, in_ranges
 class DCLabEncoders:
     def __init__(self, node):
         self.node = node
-        self.ranges = declare_ranges(node, "encoder_ids", [100, 199])
+        self.ranges = declare_ranges(node, "encoder_ids", [100, 199, 250, 299])
         alpha = float(node.declare_parameter("speed_filter_alpha", 0.0).value)
         self.speed = frames.SpeedEstimator(alpha)
         self.publisher = node.create_publisher(EncoderFeedback, "/encoder_feedback", 10)

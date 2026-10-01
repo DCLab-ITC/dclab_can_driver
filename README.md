@@ -30,10 +30,10 @@ The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up wit
 | `bitrate` | `1000000` | used when the node brings the interface up |
 | `configure_interface` | `true` | bring the interface up when it is down |
 | `v1_frames` | `false` | talk to DCLab boards still on V1 firmware (8-byte frames) |
-| `encoder_ids` | `[100, 199]` | `[first, last]` pairs of encoder feedback IDs |
+| `encoder_ids` | `[100, 199, 250, 299]` | `[first, last]` pairs of position feedback IDs (encoders, Smart Driver, Motor Controller) |
 | `speed_filter_alpha` | `0.0` | smoothing of the estimated speed (0 = raw) |
 | `sensor_input_ids` | `[500, 510]` | Sensor digital/analog frame IDs |
-| `swerve_feedback_ids` | `[250, 299]` | Swerve feedback IDs |
+| `swerve_feedback_ids` | `[0, -1]` (none) | V1 Swerve Controller feedback IDs |
 | `imu_id` | `1000` | IMU quaternion ID |
 | `log_rates` | `false` | log frames per second |
 
@@ -79,7 +79,9 @@ These formats apply to Smart Driver 2.6, Sensor 2.7 and Absolute Encoder 2.5, an
 - The Sensor allows at most two encoders per ID.
 - The driver estimates `speed` from successive positions.
 
-**Unchanged from V1:** the Sensor digital/analog frame, the Controller PWM/servo/digital frames, the Swerve frames and the IMU frame.
+**Motor Controller (V2, replaces the Swerve Controller):** it uses exactly the Smart Driver's frames. Send each channel's command like a Smart Driver motor to that channel's receive ID (two channels on one ID: the pair command, one DLC 8 frame); its positions arrive like encoder feedback on each channel's transmit ID (defaults 201/202 and 251/252, inside `encoder_ids`).
+
+**Unchanged from V1:** the Sensor digital/analog frame, the Controller PWM/servo/digital frames, the Swerve frames (V1 Swerve Controller only) and the IMU frame.
 
 ## Changes from the January 2026 version
 

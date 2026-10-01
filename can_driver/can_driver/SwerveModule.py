@@ -1,6 +1,7 @@
-"""DCLab Swerve module: /publish_swerve (SwerveCommand) and
-/swerve_feedback (SwerveFeedback). Parameter swerve_feedback_ids
-([first, last] pairs, default [250, 299])."""
+"""DCLab Swerve module (V1 Swerve Controller firmware only): /publish_swerve
+(SwerveCommand) and /swerve_feedback (SwerveFeedback). Parameter
+swerve_feedback_ids ([first, last] pairs; default [0, -1] = none). The V2
+Motor Controller that replaces it uses the Smart Driver frames instead."""
 
 from custom_messages.msg import SwerveCommand, SwerveFeedback
 
@@ -11,7 +12,7 @@ from .id_ranges import declare_ranges, in_ranges
 class SwerveModule:
     def __init__(self, node):
         self.node = node
-        self.ranges = declare_ranges(node, "swerve_feedback_ids", [250, 299])
+        self.ranges = declare_ranges(node, "swerve_feedback_ids", [0, -1])
         node.create_subscription(SwerveCommand, "/publish_swerve", self.command, 10)
         self.publisher = node.create_publisher(SwerveFeedback, "/swerve_feedback", 10)
 
