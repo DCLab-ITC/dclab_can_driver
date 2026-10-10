@@ -14,7 +14,7 @@ The node supports:
 
 ```bash
 cd ~/ros2_ws/src
-git clone https://github.com/soubun72/dclab_can_driver.git
+git clone https://github.com/DCLab-ITC/dclab_can_driver.git
 sudo apt install python3-can
 cd ~/ros2_ws && colcon build && source install/setup.bash
 ros2 run can_driver can_driver_node
