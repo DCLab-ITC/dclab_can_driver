@@ -11,34 +11,46 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from can_driver import dclab_frames as f  # noqa: E402
 
 
-class SmartDriverCommands(unittest.TestCase):
+class MotorCommands(unittest.TestCase):
     def test_golden_vector(self):
-        # 6.0 = 0x40C00000; speed mode 2 in bits 3..0.
-        self.assertEqual(f.smart_driver_command(f.MODE_SPEED, 6.0), bytes([0x02, 0x00, 0xC0, 0x40]))
+        # 6.0 = 0x40C00000; enable bit 3 + speed mode 2 = 0x0A.
+        self.assertEqual(f.motor_command(True, f.MODE_SPEED, 6.0), bytes([0x0A, 0x00, 0xC0, 0x40]))
 
     def test_goal_keeps_28_bits(self):
         for goal in (0.0, -1.5, 3.14159, 1234.5678, -0.001):
-            mode, back = f.decode_motor_word(f.motor_word(f.MODE_POSITION, goal))
-            self.assertEqual(mode, f.MODE_POSITION)
+            enabled, mode, back = f.decode_motor_word(f.motor_word(f.MODE_POSITION, goal))
+            self.assertEqual((enabled, mode), (True, f.MODE_POSITION))
             self.assertLessEqual(abs(back - goal), abs(goal) * 2 ** -19 + 1e-45)
 
-    def test_pair_is_motor1_then_motor2(self):
-        data = f.smart_driver_pair_command(f.MODE_VOLTAGE, 3.0, f.MODE_SPEED, -2.0)
+    def test_m1_only_is_dlc4(self):
+        data = f.motor_command(True, f.MODE_VOLTAGE, 3.0, False, 99, math.nan)  # M2 not checked
+        self.assertEqual(f.decode_motor_word(data), (True, f.MODE_VOLTAGE, 3.0))
+        self.assertEqual(len(data), 4)
+
+    def test_both_is_m1_then_m2(self):
+        data = f.motor_command(True, f.MODE_VOLTAGE, 3.0, True, f.MODE_SPEED, -2.0)
         self.assertEqual(len(data), 8)
-        self.assertEqual(f.decode_motor_word(data[:4]), (f.MODE_VOLTAGE, 3.0))
-        self.assertEqual(f.decode_motor_word(data[4:]), (f.MODE_SPEED, -2.0))
+        self.assertEqual(f.decode_motor_word(data[:4]), (True, f.MODE_VOLTAGE, 3.0))
+        self.assertEqual(f.decode_motor_word(data[4:]), (True, f.MODE_SPEED, -2.0))
+
+    def test_m2_only_disables_m1(self):
+        data = f.motor_command(False, 99, math.nan, True, f.MODE_SPEED, -2.0)  # M1 not checked
+        self.assertEqual(data[:4], bytes(4))
+        self.assertFalse(f.decode_motor_word(data[:4])[0])
+        self.assertEqual(f.decode_motor_word(data[4:]), (True, f.MODE_SPEED, -2.0))
 
     def test_ramp_modes_and_refusals(self):
-        self.assertEqual(f.decode_motor_word(f.motor_word(f.MODE_VOLTAGE_RAMP, 12.0)), (5, 12.0))
+        word = f.motor_word(f.MODE_VOLTAGE_RAMP, 12.0)
+        self.assertEqual(f.decode_motor_word(word), (True, 5, 12.0))
         with self.assertRaises(ValueError):
-            f.motor_word(6, 1.0)
+            f.motor_command(False, 0, 0.0, False, 0, 0.0)
+        for mode in (6, 7):
+            with self.assertRaises(ValueError):
+                f.motor_command(True, mode, 1.0)
         with self.assertRaises(ValueError):
-            f.motor_word(f.MODE_SPEED, math.nan)
-
-    def test_legacy_v1_frame(self):
-        data = f.legacy_smart_driver_command(6.0, voltage=True)
-        self.assertEqual(data[0], 0x04)
-        self.assertEqual(struct.unpack_from("<f", data, 2)[0], 6.0)
+            f.motor_command(True, f.MODE_SPEED, math.nan)
+        with self.assertRaises(ValueError):
+            f.motor_command(True, f.MODE_SPEED, 1.0, True, f.MODE_SPEED, math.inf)
 
 
 class Feedback(unittest.TestCase):

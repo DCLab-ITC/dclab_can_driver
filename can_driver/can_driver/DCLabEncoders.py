@@ -3,8 +3,7 @@ encoders, Absolute Encoder), published on /encoder_feedback.
 
 Firmware V2 sends float32 position only: DLC 4 for one encoder, DLC 8 for two
 encoders sharing an ID (slot 0 = lower-numbered encoder, slot 1 = the other).
-The speed field is estimated here from successive positions. With
-v1_frames=true a DLC 8 frame is read as V1's (position, speed) instead.
+The speed field is estimated here from successive positions.
 
 Parameters: encoder_ids ([first, last] pairs, default [100, 199, 250, 299]:
 encoders and the Motor Controller's channel feedback) and
@@ -30,10 +29,6 @@ class DCLabEncoders:
             return False
         now = self.node.get_clock().now().nanoseconds * 1e-9
         data = bytes(msg.data[:msg.dlc])
-        if self.node.v1_frames and msg.dlc == 8:
-            position, speed = frames.legacy_encoder_feedback(data)
-            self.publish(msg.arbitration_id, 0, position, speed)
-            return True
         for slot, position in enumerate(frames.encoder_positions(data)):
             speed = self.speed.update((msg.arbitration_id, slot), position, now)
             self.publish(msg.arbitration_id, slot, position, speed)

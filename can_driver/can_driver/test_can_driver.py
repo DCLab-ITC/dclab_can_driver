@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """Example publisher for bench tests: ros2 run can_driver test_can_driver
---ros-args -p device:=smart_driver (smart_driver, smart_driver_pair,
-controller, swerve, vesc, robomaster)."""
+--ros-args -p device:=motor (motor, motor_pair, motor_m2, controller,
+swerve, vesc, robomaster)."""
 
 import rclpy
 from rclpy.node import Node
 
-from custom_messages.msg import (DigitalAndSolenoidCommand, PwmCommand,
-                                 RobomasterCurrentCommand, ServoCommand, SmartDriverCommand,
-                                 SmartDriverPairCommand, SwerveCommand, VescCommand)
+from custom_messages.msg import (DCLabMotorCommand, DigitalAndSolenoidCommand, PwmCommand,
+                                 RobomasterCurrentCommand, ServoCommand, SwerveCommand,
+                                 VescCommand)
 
 
 class TestCanDriver(Node):
     def __init__(self):
         super().__init__("test_can_driver")
-        self.device = self.declare_parameter("device", "smart_driver").value
+        self.device = self.declare_parameter("device", "motor").value
         self.pub = {
-            "smart_driver": self.create_publisher(SmartDriverCommand, "/smart_driver/command", 10),
-            "smart_driver_pair": self.create_publisher(SmartDriverPairCommand,
-                                                       "/smart_driver/pair_command", 10),
+            "motor": self.create_publisher(DCLabMotorCommand, "/dclab/motor_command", 10),
             "pwm": self.create_publisher(PwmCommand, "/publish_pwm", 10),
             "servo": self.create_publisher(ServoCommand, "/publish_servo", 10),
             "digital": self.create_publisher(DigitalAndSolenoidCommand, "/publish_digital_solenoid", 10),
@@ -31,14 +29,21 @@ class TestCanDriver(Node):
     def tick(self):
         getattr(self, "send_" + self.device)()
 
-    def send_smart_driver(self):
-        msg = SmartDriverCommand(can_id=1, mode=SmartDriverCommand.MODE_SPEED, goal=5.0)
-        self.pub["smart_driver"].publish(msg)
+    def send_motor(self):
+        """M1 alone on ID 101: 5 rad/s (DLC 4)."""
+        self.pub["motor"].publish(DCLabMotorCommand(
+            can_id=101, m1_enable=True, mode1=DCLabMotorCommand.MODE_SPEED, goal1=5.0))
 
-    def send_smart_driver_pair(self):
-        msg = SmartDriverPairCommand(can_id=1, mode1=SmartDriverCommand.MODE_SPEED, goal1=5.0,
-                                     mode2=SmartDriverCommand.MODE_POSITION, goal2=3.14)
-        self.pub["smart_driver_pair"].publish(msg)
+    def send_motor_pair(self):
+        """Both motors on ID 101 (DLC 8)."""
+        self.pub["motor"].publish(DCLabMotorCommand(
+            can_id=101, m1_enable=True, mode1=DCLabMotorCommand.MODE_SPEED, goal1=5.0,
+            m2_enable=True, mode2=DCLabMotorCommand.MODE_POSITION, goal2=3.14))
+
+    def send_motor_m2(self):
+        """M2 only on ID 101 (DLC 8, M1 untouched)."""
+        self.pub["motor"].publish(DCLabMotorCommand(
+            can_id=101, m2_enable=True, mode2=DCLabMotorCommand.MODE_VOLTAGE, goal2=2.0))
 
     def send_controller(self):
         self.pub["pwm"].publish(PwmCommand(can_id=600, pwm1_value=0.1, pwm2_value=0.2,

@@ -1,24 +1,27 @@
 """CAN frame formats of the DCLab boards, without ROS or python-can.
 
-Firmware V2 (Smart Driver 2.6, Sensor 2.7, Absolute Encoder 2.5 and later)
-uses 4 bytes per motor or encoder:
+Firmware V2 (Smart Driver 2.13, Motor Controller 2.22, Sensor 2.7, Absolute
+Encoder 2.5 and later) uses 4 bytes per motor or encoder:
 
-* Smart Driver command: little-endian uint32, bits 3..0 = mode, bits 31..4 =
-  the goal float32 with its 4 lowest mantissa bits dropped. Two motors whose
-  receive IDs are equal share one DLC 8 frame (motor 1 in bytes 0-3, motor 2
-  in bytes 4-7); otherwise each motor's ID carries DLC 4.
-* Encoder feedback (Smart Driver motors, Sensor encoders, Absolute Encoder):
-  float32 position per encoder. Two encoders sharing an ID send one DLC 8
-  frame (lower-numbered encoder first); otherwise DLC 4. Speed is not sent.
+* Motor command (Smart Driver and Motor Controller): little-endian uint32,
+  bits 2..0 = mode, bit 3 = enable, bits 31..4 = the goal float32 with its 4
+  lowest mantissa bits dropped. On one receive ID, DLC 4 carries the first
+  motor (M1) and DLC 8 M1 in bytes 0-3 and the second motor (M2) in bytes
+  4-7; a half without the enable bit is skipped by the board (that motor
+  keeps its command). A motor alone on its ID is M1 and takes DLC 4 only.
+* Encoder feedback (Smart Driver motors, Motor Controller channels, Sensor
+  encoders, Absolute Encoder): float32 position per encoder. Two encoders
+  sharing an ID send one DLC 8 frame (lower-numbered encoder first);
+  otherwise DLC 4. Speed is not sent.
 
 Every function returns plain values so the formats can be tested without
-hardware. The legacy V1 formats are kept for boards not yet updated.
+hardware.
 """
 
 import math
 import struct
 
-# Smart Driver modes (bits 3..0 of the command word).
+# Motor modes (bits 2..0 of the command word).
 MODE_VOLTAGE = 0
 MODE_POSITION = 1
 MODE_SPEED = 2
@@ -27,34 +30,39 @@ MODE_SPEED_RAMP = 4
 MODE_VOLTAGE_RAMP = 5
 MODES = (MODE_VOLTAGE, MODE_POSITION, MODE_SPEED,
          MODE_POSITION_RAMP, MODE_SPEED_RAMP, MODE_VOLTAGE_RAMP)
+COMMAND_ENABLE = 0x8
+DISABLED_WORD = bytes(4)  # a half the board skips
+MAX_STANDARD_ID = 0x7FF
 
 
 def motor_word(mode, goal):
-    """The 4 command bytes for one motor."""
+    """The 4 enabled command bytes for one motor."""
     if mode not in MODES:
-        raise ValueError(f"unknown Smart Driver mode {mode}")
+        raise ValueError(f"unknown motor mode {mode}")
     goal = float(goal)
     if not math.isfinite(goal):
         raise ValueError("goal must be finite")
     bits = struct.unpack("<I", struct.pack("<f", goal))[0]
-    return struct.pack("<I", (bits & ~0xF & 0xFFFFFFFF) | mode)
+    return struct.pack("<I", (bits & ~0xF & 0xFFFFFFFF) | COMMAND_ENABLE | mode)
 
 
 def decode_motor_word(data):
-    """(mode, goal) from 4 command bytes, as the board reads them."""
+    """(enabled, mode, goal) from 4 command bytes, as the board reads them."""
     word = struct.unpack_from("<I", bytes(data), 0)[0]
     goal = struct.unpack("<f", struct.pack("<I", word & ~0xF & 0xFFFFFFFF))[0]
-    return word & 0xF, goal
+    return bool(word & COMMAND_ENABLE), word & 0x7, goal
 
 
-def smart_driver_command(mode, goal):
-    """DLC 4 frame data for a motor on its own receive ID."""
-    return motor_word(mode, goal)
-
-
-def smart_driver_pair_command(mode1, goal1, mode2, goal2):
-    """DLC 8 frame data for two motors sharing one receive ID."""
-    return motor_word(mode1, goal1) + motor_word(mode2, goal2)
+def motor_command(m1_enable, mode1, goal1, m2_enable=False, mode2=0, goal2=0.0):
+    """Frame data for the motors on one receive ID: DLC 4 for M1 alone,
+    DLC 8 when M2 is enabled (M1's half disabled unless m1_enable).
+    ValueError when neither is enabled or an enabled half is invalid."""
+    if not m1_enable and not m2_enable:
+        raise ValueError("neither motor is enabled")
+    first = motor_word(mode1, goal1) if m1_enable else DISABLED_WORD
+    if not m2_enable:
+        return first
+    return first + motor_word(mode2, goal2)
 
 
 def encoder_positions(data):
@@ -65,21 +73,6 @@ def encoder_positions(data):
     if len(data) == 8:
         return list(struct.unpack_from("<ff", data, 0))
     raise ValueError(f"encoder feedback must be 4 or 8 bytes, got {len(data)}")
-
-
-def legacy_encoder_feedback(data):
-    """V1 feedback frame: (position, speed) floats, DLC 8."""
-    return struct.unpack_from("<ff", bytes(data), 0)
-
-
-def legacy_smart_driver_command(goal, position=False, speed=False,
-                                voltage=False, stop=False, reset=False):
-    """V1 Smart Driver command frame (8 bytes), for boards still on V1."""
-    data = bytearray(8)
-    data[0] = (int(bool(position)) | int(bool(speed)) << 1 | int(bool(voltage)) << 2 |
-               int(bool(stop)) << 3 | int(bool(reset)) << 4)
-    data[2:6] = struct.pack("<f", float(goal))
-    return bytes(data)
 
 
 def sensor_inputs(data):

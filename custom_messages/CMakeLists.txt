@@ -19,10 +19,10 @@ find_package(rosidl_default_generators REQUIRED)
 
 # Define message files
 set(msg_files
+  "msg/DCLabMotorCommand.msg"
   "msg/DigitalAndAnalogFeedback.msg"
   "msg/DigitalAndSolenoidCommand.msg"
   "msg/EncoderFeedback.msg"
-  "msg/MotorCommand.msg"
   "msg/PwmCommand.msg"
   "msg/RobomasterCommand.msg"
   "msg/RobomasterCurrentCommand.msg"
@@ -35,8 +35,6 @@ set(msg_files
   "msg/VescStatusFour.msg"
   "msg/SwerveCommand.msg"
   "msg/SwerveFeedback.msg"
-  "msg/SmartDriverCommand.msg"
-  "msg/SmartDriverPairCommand.msg"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}

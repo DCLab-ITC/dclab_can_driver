@@ -16,7 +16,7 @@ from rclpy.node import Node
 from .ControllerBoard import ControllerBoard
 from .DCLabEncoders import DCLabEncoders
 from .DCLabSensorInputs import DCLabSensorInputs
-from .DCLabSmartDriver import DCLabSmartDriver
+from .DCLabMotors import DCLabMotors
 from .IMUBoard import IMUBoard
 from .Robomaster import Robomaster
 from .SwerveModule import SwerveModule
@@ -32,8 +32,6 @@ class CanDriver(Node, can.Listener):
         # passwordless sudo for `ip`); set false when the system does it.
         self.configure_interface = bool(self.declare_parameter("configure_interface", True).value)
         self.log_rates = bool(self.declare_parameter("log_rates", False).value)
-        # Talk to boards still running V1 firmware (8-byte frames).
-        self.v1_frames = bool(self.declare_parameter("v1_frames", False).value)
 
         self.bus = None
         self.notifier = None
@@ -43,7 +41,7 @@ class CanDriver(Node, can.Listener):
         self.last_recovery = 0.0
 
         self.devices = [
-            DCLabSmartDriver(self), DCLabEncoders(self), DCLabSensorInputs(self),
+            DCLabMotors(self), DCLabEncoders(self), DCLabSensorInputs(self),
             ControllerBoard(self), SwerveModule(self), IMUBoard(self),
             Robomaster(self), Vesc(self),
         ]

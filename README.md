@@ -7,7 +7,7 @@ Two ROS 2 packages that connect a SocketCAN bus to the DCLab boards and to commo
 
 The node supports:
 
-- DCLab boards: Smart Driver, Sensor, Controller, Swerve module, Absolute Encoder and IMU.
+- DCLab boards: Smart Driver, Motor Controller, Sensor, Controller, Swerve module, Absolute Encoder and IMU.
 - Other motor controllers: VESC and DJI RoboMaster C610/C620.
 
 ## Install
@@ -29,7 +29,6 @@ The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up wit
 | `channel` | `can0` | SocketCAN interface |
 | `bitrate` | `1000000` | used when the node brings the interface up |
 | `configure_interface` | `true` | bring the interface up when it is down |
-| `v1_frames` | `false` | talk to DCLab boards still on V1 firmware (8-byte frames) |
 | `encoder_ids` | `[100, 199, 250, 299]` | `[first, last]` pairs of position feedback IDs (encoders, Smart Driver, Motor Controller) |
 | `speed_filter_alpha` | `0.0` | smoothing of the estimated speed (0 = raw) |
 | `sensor_input_ids` | `[500, 510]` | Sensor digital/analog frame IDs |
@@ -43,10 +42,8 @@ Example: `ros2 run can_driver can_driver_node --ros-args -p encoder_ids:="[101, 
 
 | topic | type | direction |
 |---|---|---|
-| `/smart_driver/command` | `SmartDriverCommand` | to one Smart Driver motor |
-| `/smart_driver/pair_command` | `SmartDriverPairCommand` | to both motors of a Smart Driver whose motors share a receive ID |
-| `/publish_motor` | `MotorCommand` | V1 message, still accepted |
-| `/encoder_feedback` | `EncoderFeedback` | from Smart Driver, Sensor and Absolute Encoder |
+| `/dclab/motor_command` | `DCLabMotorCommand` | to the Smart Driver and Motor Controller motors on one receive ID |
+| `/encoder_feedback` | `EncoderFeedback` | from Smart Driver, Motor Controller, Sensor and Absolute Encoder |
 | `/digital_analog_feedback` | `DigitalAndAnalogFeedback` | from the Sensor board |
 | `/publish_pwm`, `/publish_servo`, `/publish_digital_solenoid` | Controller board | to the board |
 | `/publish_swerve`, `/swerve_feedback` | Swerve module | both |
@@ -54,22 +51,48 @@ Example: `ros2 run can_driver can_driver_node --ros-args -p encoder_ids:="[101, 
 | `/publish_vesc`, `/vesc_status1..4` | VESC | both |
 | `/publish_robomaster_current`, `/robomaster_feedback` | RoboMaster | both |
 
+## Commanding motors
+
+`/dclab/motor_command` (`DCLabMotorCommand`) sends the motors on one receive ID. M1 and M2 are the first and second motor on `can_id`, not motor 1 and 2 of the board.
+
+| `m1_enable` | `m2_enable` | sent on `can_id` |
+|---|---|---|
+| true | false | DLC 4: M1 |
+| false | true | DLC 8: M1 disabled, M2 |
+| true | true | DLC 8: M1, M2 |
+| false | false | nothing (warning) |
+
+An unknown mode, a goal that is not finite or a `can_id` above `0x7FF` is refused with a warning. If you enable M2 on an ID that has only one motor, the board ignores the frame. The driver cannot check this.
+
+```bash
+# both Smart Driver motors on ID 101: motor 1 at 3 V, motor 2 at -2 rad/s
+ros2 topic pub --once /dclab/motor_command custom_messages/msg/DCLabMotorCommand \
+  "{can_id: 101, m1_enable: true, mode1: 0, goal1: 3.0, m2_enable: true, mode2: 2, goal2: -2.0}"
+# only motor 2 on ID 101 (motor 1 keeps its command)
+ros2 topic pub --once /dclab/motor_command custom_messages/msg/DCLabMotorCommand \
+  "{can_id: 101, m2_enable: true, mode2: 2, goal2: -2.0}"
+# a motor alone on ID 102
+ros2 topic pub --once /dclab/motor_command custom_messages/msg/DCLabMotorCommand \
+  "{can_id: 102, m1_enable: true, mode1: 1, goal1: 1.57}"
+```
+
 ## DCLab frame formats (firmware V2)
 
-These formats apply to Smart Driver 2.6, Sensor 2.7 and Absolute Encoder 2.5, and to later versions.
+These formats apply to Smart Driver 2.13, Motor Controller 2.22, Sensor 2.7 and Absolute Encoder 2.5, and to later versions.
 
-**Smart Driver command.** Each motor takes 4 bytes: a little-endian `uint32` word.
+**Motor command (Smart Driver and Motor Controller).** Each motor takes 4 bytes: a little-endian `uint32` word.
 
-- Bits 3..0 are the mode:
-  - `0` voltage (V)
+- Bits 2..0 are the mode:
+  - `0` voltage (V; on the Motor Controller, the voltage or current of its motor)
   - `1` position (rad)
   - `2` speed (rad/s)
   - `3`/`4`/`5` set the position, speed or voltage ramp rate. The rate lasts until the board restarts; the saved settings are the default.
+  - `6` and `7` are ignored.
+- Bit 3 is the enable flag. A word without it is skipped: that motor keeps its command and its CAN timeout keeps running.
 - Bits 31..4 are the goal: a `float32` with its 4 lowest mantissa bits dropped, which leaves about 6 significant digits.
-- If the two motors have **different** receive IDs, each motor's ID takes a DLC 4 frame.
-- If they have the **same** receive ID, one DLC 8 frame carries motor 1 in bytes 0-3 and motor 2 in bytes 4-7.
-- The board drops frames with the wrong length.
-- To stop a motor, send voltage 0. There is no separate stop or reset flag. Reset the position from the Super App.
+- On one receive ID, a DLC 4 frame carries the first motor (M1). A DLC 8 frame carries M1 in bytes 0-3 and the second motor (M2) in bytes 4-7.
+- M1 is the lower-numbered motor (or Motor Controller channel) on that ID. A motor alone on its ID is M1 and takes DLC 4 only.
+- To stop a motor, send voltage 0. A disabled motor is not stopped. There is no reset flag; reset the position from the Super App.
 
 **Encoder feedback.** Each encoder sends a `float32` position in 4 bytes (little-endian); the boards no longer send speed.
 
@@ -79,14 +102,16 @@ These formats apply to Smart Driver 2.6, Sensor 2.7 and Absolute Encoder 2.5, an
 - The Sensor allows at most two encoders per ID.
 - The driver estimates `speed` from successive positions.
 
-**Motor Controller (V2, replaces the Swerve Controller):** it uses exactly the Smart Driver's frames. Send each channel's command like a Smart Driver motor to that channel's receive ID (two channels on one ID: the pair command, one DLC 8 frame); its positions arrive like encoder feedback on each channel's transmit ID (defaults 201/202 and 251/252, inside `encoder_ids`).
+**Motor Controller (V2, replaces the Swerve Controller):** it takes the same motor commands on each channel's receive ID (up to two channels per ID). Its positions arrive like encoder feedback on each channel's transmit ID (defaults 201/202 and 251/252, inside `encoder_ids`).
+
+These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older boards ignore the commands (no enable flag), and these boards ignore commands from older drivers, so update both together.
 
 **Unchanged from V1:** the Sensor digital/analog frame, the Controller PWM/servo/digital frames, the Swerve frames (V1 Swerve Controller only) and the IMU frame.
 
 ## Changes from the January 2026 version
 
 - The package runs with `ros2 run`. It uses package-relative imports; the old ones only worked from inside the source folder.
-- It uses the V2 Smart Driver commands and the position-only feedback. With `v1_frames:=true` it still speaks V1.
+- It uses the V2 motor commands (`/dclab/motor_command`, one topic for the Smart Driver and the Motor Controller) and the position-only feedback. V1 frames, `/publish_motor` and the `v1_frames` parameter were removed.
 - ID ranges and the interface are ROS parameters.
 - The CAN interface is reopened on a timer. Before, a failed setup retried by endless recursion, and a send error could crash the node because its error timer was never initialised.
 - **VESC current and brake modes were sent in µA instead of mA** (×10⁶ instead of ×10³), which is 1000× the requested current. This is fixed. VESC position mode is in degrees, as the VESC firmware expects.
