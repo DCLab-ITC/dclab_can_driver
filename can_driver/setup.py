@@ -4,7 +4,7 @@ package_name = "can_driver"
 
 setup(
     name=package_name,
-    version="2.0.0",
+    version="2.1.0",
     packages=[package_name],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
@@ -21,6 +21,7 @@ setup(
     entry_points={
         "console_scripts": [
             "can_driver_node = can_driver.can_driver:main",
+            "dclab_link = can_driver.dclab_link:main",
             "test_can_driver = can_driver.test_can_driver:main",
         ],
     },

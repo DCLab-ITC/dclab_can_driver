@@ -35,8 +35,25 @@ The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up wit
 | `swerve_feedback_ids` | `[0, -1]` (none) | V1 Swerve Controller feedback IDs |
 | `imu_id` | `1000` | IMU quaternion ID |
 | `log_rates` | `false` | log frames per second |
+| `superapp_link` | `true` | run DCLab Link for the Super App's Robot over SSH (see below) |
 
 Example: `ros2 run can_driver can_driver_node --ros-args -p encoder_ids:="[101, 104, 151, 152]"`
+
+## Super App (Robot over SSH)
+
+While the node runs, it also runs DCLab Link (`can_driver/dclab_link.py`), so the Super App can
+configure and update the robot's boards from a laptop. On the laptop, keep this open and choose
+Robot over SSH in the Super App:
+
+    ssh -N -L 48791:127.0.0.1:48791 USER@ROBOT
+
+DCLab Link is a separate process at low CPU priority, so it does not slow the node: it listens on
+127.0.0.1 only (reachable through SSH), sends nothing until a page connects, and the kernel passes
+it only the boards' answers to the Super App, not the robot's own traffic. It stops with the node.
+Measured on a Jetson with 3000 frames/s on the bus and a page connected: no change in the node's
+receive latency (p99 about 1.5 ms either way), no frames lost. Turn it off with
+`-p superapp_link:=false`; without ROS, run it alone with `ros2 run can_driver dclab_link` or
+`python3 dclab_link.py`.
 
 ## Topics
 
@@ -109,6 +126,8 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 **Unchanged from V1:** the Sensor digital/analog frame, the Controller PWM/servo/digital frames, the Swerve frames (V1 Swerve Controller only) and the IMU frame.
 
 ## Changes from the January 2026 version
+
+- 2.1.0: the node runs DCLab Link for the Super App (parameter `superapp_link`).
 
 - The package runs with `ros2 run`. It uses package-relative imports; the old ones only worked from inside the source folder.
 - It uses the V2 motor commands (`/dclab/motor_command`, one topic for the Smart Driver and the Motor Controller) and the position-only feedback. V1 frames, `/publish_motor` and the `v1_frames` parameter were removed.

@@ -6,7 +6,9 @@ Each device module registers the CAN IDs it handles; received frames are
 dispatched to them and ROS commands are sent as CAN frames. See README.md
 for topics, parameters and frame formats."""
 
+import os
 import subprocess
+import sys
 import time
 
 import can
@@ -32,6 +34,12 @@ class CanDriver(Node, can.Listener):
         # passwordless sudo for `ip`); set false when the system does it.
         self.configure_interface = bool(self.declare_parameter("configure_interface", True).value)
         self.log_rates = bool(self.declare_parameter("log_rates", False).value)
+        # DCLab Link for the Super App's "Robot over SSH" (dclab_link.py): a
+        # separate low-priority process, so it never slows this node; idle
+        # (sends nothing) until a page connects through an SSH tunnel.
+        self.superapp_link = bool(self.declare_parameter("superapp_link", True).value)
+        self.link = None
+        self.link_started = 0.0
 
         self.bus = None
         self.notifier = None
@@ -46,6 +54,7 @@ class CanDriver(Node, can.Listener):
             Robomaster(self), Vesc(self),
         ]
         self.open_bus()
+        self.ensure_link()
         self.create_timer(1.0, self.report_rates)
         self.create_timer(2.0, self.ensure_bus)
 
@@ -85,6 +94,41 @@ class CanDriver(Node, can.Listener):
     def ensure_bus(self):
         if self.bus is None:
             self.open_bus()
+        self.ensure_link()
+
+    # --- DCLab Link (Super App over SSH) ---
+    def ensure_link(self):
+        """Start the relay once the bus is open; restart it (at most every
+        30 s) if it stopped, e.g. port 48791 taken by another relay."""
+        if not self.superapp_link or self.bus is None:
+            return
+        if self.link is not None and self.link.poll() is None:
+            return
+        if self.link is not None:
+            self.get_logger().warn(
+                f"DCLab Link stopped (exit {self.link.returncode})")
+            self.link = None
+        if self.link_started and time.monotonic() - self.link_started < 30.0:
+            return
+        self.link_started = time.monotonic()
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dclab_link.py")
+        try:
+            self.link = subprocess.Popen(
+                [sys.executable, script, "--can", self.channel, "--with-parent"],
+                stdin=subprocess.DEVNULL)
+            self.get_logger().info(
+                "DCLab Link on 127.0.0.1:48791 for the Super App (Robot over SSH)")
+        except OSError as error:
+            self.get_logger().warn(f"DCLab Link not started: {error}")
+
+    def stop_link(self):
+        if self.link is not None and self.link.poll() is None:
+            self.link.terminate()
+            try:
+                self.link.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                self.link.kill()
+        self.link = None
 
     def send(self, arbitration_id, data, extended=False):
         """Send one frame; drops it (with a warning) when the bus is down or
@@ -138,6 +182,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        node.stop_link()
         node.close_bus()
         node.destroy_node()
         if rclpy.ok():
