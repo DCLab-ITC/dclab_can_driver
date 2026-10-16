@@ -40,6 +40,8 @@ class CanDriver(Node, can.Listener):
         self.superapp_link = bool(self.declare_parameter("superapp_link", True).value)
         self.link = None
         self.link_started = 0.0
+        self.link_backoff = 30.0
+        self.link_warned = False
 
         self.bus = None
         self.notifier = None
@@ -98,26 +100,35 @@ class CanDriver(Node, can.Listener):
 
     # --- DCLab Link (Super App over SSH) ---
     def ensure_link(self):
-        """Start the relay once the bus is open; restart it (at most every
-        30 s) if it stopped, e.g. port 48791 taken by another relay."""
+        """Start the relay once the bus is open and restart it if it stops.
+        One that stops at once (port 48791 taken, e.g. by the node of a
+        second CAN bus or a dclab_link.py started by hand; interface down) is
+        retried less and less often (30 s up to 10 min) and reported once."""
         if not self.superapp_link or self.bus is None:
             return
         if self.link is not None and self.link.poll() is None:
             return
+        now = time.monotonic()
         if self.link is not None:
-            self.get_logger().warn(
-                f"DCLab Link stopped (exit {self.link.returncode})")
+            if now - self.link_started < 10.0:
+                if not self.link_warned:
+                    self.get_logger().warn(
+                        f"DCLab Link did not start (exit {self.link.returncode}); "
+                        "retrying now and then")
+                    self.link_warned = True
+                self.link_backoff = min(self.link_backoff * 2.0, 600.0)
+            else:
+                self.get_logger().warn(f"DCLab Link stopped (exit {self.link.returncode})")
+                self.link_backoff = 30.0
             self.link = None
-        if self.link_started and time.monotonic() - self.link_started < 30.0:
+        if self.link_started and now - self.link_started < self.link_backoff:
             return
-        self.link_started = time.monotonic()
+        self.link_started = now
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dclab_link.py")
         try:
             self.link = subprocess.Popen(
-                [sys.executable, script, "--can", self.channel, "--with-parent"],
+                [sys.executable, script, "--can", self.channel, "--parent", str(os.getpid())],
                 stdin=subprocess.DEVNULL)
-            self.get_logger().info(
-                "DCLab Link on 127.0.0.1:48791 for the Super App (Robot over SSH)")
         except OSError as error:
             self.get_logger().warn(f"DCLab Link not started: {error}")
 

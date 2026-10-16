@@ -307,18 +307,18 @@ def main():
     parser.add_argument("--port", type=int, default=48791, help="local port (default 48791)")
     parser.add_argument("--allow-origin", action="append", default=[],
                         help="another Super App site allowed to connect (repeatable)")
-    parser.add_argument("--with-parent", action="store_true",
-                        help="exit when the process that started it exits (can_driver)")
+    parser.add_argument("--parent", type=int, default=0, metavar="PID",
+                        help="exit when this process (the can_driver node that started it) exits")
     args = parser.parse_args()
     try:
         os.nice(10)  # the robot's own control always comes first
     except OSError:
         pass
-    if args.with_parent:
-        parent = os.getppid()
-
+    if args.parent:
         def watch_parent():
-            while os.getppid() == parent:
+            # the parent's PID is passed in: had it died before this line,
+            # getppid() would already show the new parent
+            while os.getppid() == args.parent:
                 time.sleep(1.0)
             os._exit(0)
 
