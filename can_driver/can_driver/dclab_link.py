@@ -360,6 +360,10 @@ def main():
             previous, current["session"] = current["session"], session
         if previous is not None:
             log("a newer page took over")
+            try:  # said first, or that page reconnects and takes it back
+                previous.ws.send_text("#XThe robot link was taken over by another page\r")
+            except OSError:
+                pass
             previous.ws.close()
         log("page connected")
         session.run()
