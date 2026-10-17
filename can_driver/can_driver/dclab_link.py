@@ -38,7 +38,7 @@ import sys
 import threading
 import time
 
-VERSION = "3"
+VERSION = "3.1"
 DEFAULT_ORIGINS = ("https://superapp-v2.dclab.live",)
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 CAN_FRAME = struct.Struct("=IB3x8s")
@@ -101,6 +101,10 @@ class WebSocket:
         self.sock = sock
         self.send_lock = threading.Lock()
         self.closed = False
+        # largest message: a login line before the login (review #3: a
+        # multi-GB frame from anyone on the network ran the robot out of
+        # memory), a burst of slcan lines after
+        self.max_message = 1024
 
     def send_text(self, text):
         payload = text.encode("ascii")
@@ -141,20 +145,23 @@ class WebSocket:
                 length = struct.unpack("!H", self._recv_exact(2))[0]
             elif length == 127:
                 length = struct.unpack("!Q", self._recv_exact(8))[0]
+            if length + sum(len(p) for p in parts) > self.max_message or (opcode >= 0x8 and length > 125):
+                raise ConnectionError("message too long")
             mask = self._recv_exact(4) if b1 & 0x80 else b"\0\0\0\0"
-            body = bytearray(self._recv_exact(length))
-            for i in range(length):
-                body[i] ^= mask[i % 4]
+            raw = self._recv_exact(length)
+            key = int.from_bytes((mask * (length // 4 + 1))[:length], "big")
+            body = (int.from_bytes(raw, "big") ^ key).to_bytes(length, "big")
             if opcode == 0x8:
                 self._send(b"\x88\x00")
                 return
             if opcode == 0x9:
-                self._send(struct.pack("!BB", 0x8A, len(body)) + bytes(body[:125]))
+                self._send(struct.pack("!BB", 0x8A, len(body)) + body)
                 continue
             if opcode in (0x0, 0x1, 0x2):
-                parts.append(bytes(body))
+                parts.append(body)
                 if b0 & 0x80:
-                    yield b"".join(parts).decode("ascii", "replace")
+                    # UTF-8: a password may hold any character (review #3 L8)
+                    yield b"".join(parts).decode("utf-8", "replace")
                     parts = []
 
     def close(self):
@@ -184,7 +191,22 @@ def read_request(sock):
     return lines[0], headers
 
 
-def handshake(sock, origins, loopback):
+def own_host(host):
+    """The Host header names this computer: an IP address, its name or
+    name.local, localhost. Anything else is a DNS rebinding (a website's name
+    pointed at the robot, review #3 L3)."""
+    name = host.rsplit("]", 1)[0].lstrip("[") if host.startswith("[") else host.rsplit(":", 1)[0]
+    name = name.lower().rstrip(".")
+    try:
+        socket.inet_pton(socket.AF_INET6 if ":" in name else socket.AF_INET, name)
+        return True
+    except (OSError, ValueError):
+        pass
+    me = socket.gethostname().lower()
+    return name in (me, me + ".local", me.split(".")[0] + ".local", "localhost")
+
+
+def handshake(sock, origins, loopback, allow_login=True):
     """Serve the login window, or accept a WebSocket. Returns None (done),
     "tunnel" (the Super App through SSH: the robot's login was SSH's) or
     "login" (this relay's own window: the robot's login comes first)."""
@@ -215,7 +237,7 @@ def handshake(sock, origins, loopback):
         return None
     if loopback and (origin is None or origin in origins):
         kind = "tunnel"  # (no Origin: a program on this computer, not a browser)
-    elif origin == own and path.split("?")[0] == "/link":
+    elif allow_login and origin == own and path.split("?")[0] == "/link" and own_host(headers.get("host", "")):
         kind = "login"
     else:
         log("refused a page from %s" % origin)
@@ -229,9 +251,13 @@ def handshake(sock, origins, loopback):
 
 # --- the robot computer's own login (PAM, as SSH checks it) ---
 
-def check_login(user, password):
-    """True when PAM accepts user/password. Without root only the account
-    running this relay can be checked (pam_unix's unix_chkpwd)."""
+def check_login(user, password, rhost=""):
+    """True when PAM accepts user/password and the account may log in now.
+    Without root only the account running this relay can be checked
+    (pam_unix's unix_chkpwd). Never an empty password (review #3 L6: nullok
+    let a password-less account in), the caller's address for the logs."""
+    if not password:
+        return False
     import ctypes
     import ctypes.util
     names = (ctypes.util.find_library("pam"), "libpam.so.0")
@@ -283,33 +309,48 @@ def check_login(user, password):
     libpam.pam_start.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(Conv),
                                  ctypes.POINTER(ctypes.c_void_p))
     libpam.pam_authenticate.argtypes = (ctypes.c_void_p, ctypes.c_int)
+    libpam.pam_acct_mgmt.argtypes = (ctypes.c_void_p, ctypes.c_int)
+    libpam.pam_set_item.argtypes = (ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p)
     libpam.pam_end.argtypes = (ctypes.c_void_p, ctypes.c_int)
     if libpam.pam_start(b"login", user.encode("utf-8"), ctypes.byref(conv), ctypes.byref(handle)) != 0:
         return False
-    result = libpam.pam_authenticate(handle, 0)
+    PAM_RHOST, PAM_DISALLOW_NULL_AUTHTOK = 4, 0x1
+    host = ctypes.create_string_buffer(rhost.encode("ascii", "replace"))
+    libpam.pam_set_item(handle, PAM_RHOST, ctypes.cast(host, ctypes.c_void_p))
+    result = libpam.pam_authenticate(handle, PAM_DISALLOW_NULL_AUTHTOK)
+    if result == 0:
+        result = libpam.pam_acct_mgmt(handle, PAM_DISALLOW_NULL_AUTHTOK)  # expired, locked, pam_access
     libpam.pam_end(handle, result)
     return result == 0
 
 
 class LoginThrottle:
-    """Guessing over the network: after 5 failures within a minute every
-    further attempt waits (2 s more each, up to 30 s)."""
+    """Guessing over the network: one login check at a time (parallel
+    connections all waited, then guessed together: review #3 L3), and after
+    5 failures within a minute from one address its attempts wait (2 s more
+    each, up to 30 s); other addresses are not held up."""
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.failures = []
+        self.check = threading.Lock()
+        self.failures = {}
 
-    def wait(self):
+    def run(self, address, attempt):
         with self.lock:
             now = time.monotonic()
-            self.failures = [t for t in self.failures if now - t < 60.0]
-            extra = len(self.failures) - 4
+            for key in list(self.failures):
+                self.failures[key] = [t for t in self.failures[key] if now - t < 60.0]
+                if not self.failures[key]:
+                    del self.failures[key]
+            extra = len(self.failures.get(address, ())) - 4
         if extra > 0:
             time.sleep(min(30.0, 2.0 * extra))
-
-    def failed(self):
-        with self.lock:
-            self.failures.append(time.monotonic())
+        with self.check:
+            ok = attempt()
+        if not ok:
+            with self.lock:
+                self.failures.setdefault(address, []).append(time.monotonic())
+        return ok
 
 
 WINDOW_PAGE = """<!doctype html>
@@ -337,7 +378,7 @@ button{margin-top:14px;width:100%;padding:9px;border:0;border-radius:6px;backgro
 </main><script>
 "use strict";
 const ORIGINS = ORIGIN_LIST;
-let ws = null, ready = false, opener = null, login = null, retries = 0;
+let ws = null, ready = false, opener = null, login = null, retries = 0, connectedAt = 0, ended = null;
 const status = document.getElementById("status");
 const say = (text, bad) => { status.textContent = text; status.className = bad ? "bad" : ""; };
 const post = (message) => { if (opener) window.opener.postMessage(Object.assign({dclabLink: 1}, message), opener); };
@@ -369,19 +410,28 @@ function connect() {
         if (ready) { ready = false; post({type: "fatal", message: "The robot refused the login"}); }
         return;
       }
-      accepted = true; retries = 0; ready = true;
+      accepted = true; ready = true; ended = null; connectedAt = Date.now();
       document.getElementById("login").classList.add("hidden");
       say("Connected. Keep this window open (you can minimise it); closing it ends the link.");
       post({type: "ready"});
       if (!text) return;
     }
+    /* the relay's last word (taken over by another page, the adapter lost):
+     * final, no logging in again (review #3 L1: two windows took the link
+     * from each other forever) */
+    const fatal = /(?:^|\r)#X([^\r]*)\r/.exec(text);
+    if (fatal) { ended = fatal[1]; login = null; }
     post({type: "data", text});
   };
   ws.onclose = () => {
     if (!accepted) { if (!ready) say("Cannot reach DCLab Link on this robot.", true); return; }
-    if (login && retries < 5) { retries += 1; say("Reconnecting to the robot..."); setTimeout(connect, 500 * retries); return; }
-    ready = false; post({type: "fatal", message: "The robot link closed"});
-    say("The robot link closed.", true);
+    /* a dropped connection is tried again; the count starts over only after
+     * the link has run a while */
+    if (Date.now() - connectedAt > 10000) retries = 0;
+    if (login && !ended && retries < 5) { retries += 1; say("Reconnecting to the robot..."); setTimeout(connect, 500 * retries); return; }
+    const reason = ended || "The robot link closed";
+    ready = false; post({type: "fatal", message: reason});
+    say(reason, true);
   };
 }
 document.getElementById("login").addEventListener("submit", (event) => {
@@ -410,17 +460,22 @@ class Session:
         self.can = None
         self.stop = threading.Event()
 
-    def run(self, messages):
+    def open(self):
+        """The CAN interface, before the page is told it is in (review #3 L1:
+        a login window kept logging in again to an interface that failed)."""
         try:
             self.can = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
             self.can.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, MGMT_FILTER)
             self.can.setsockopt(SOL_CAN_RAW, CAN_RAW_ERR_FILTER, struct.pack("=I", CAN_ERR_MASK))
             self.can.bind((self.interface,))
+            return True
         except OSError as error:
             log("cannot open %s: %s" % (self.interface, error))
             self.ws.send_text("#X%s cannot be opened on the robot: %s\r" % (self.interface, error))
             self.ws.close()
-            return
+            return False
+
+    def run(self, messages):
         reader = threading.Thread(target=self._can_to_page, daemon=True)
         reader.start()
         pending = ""
@@ -480,9 +535,14 @@ class Session:
                     packet = self.can.recv(CAN_FRAME.size, socket.MSG_DONTWAIT)
                 except (BlockingIOError, InterruptedError):
                     break
-                except OSError:
+                except OSError as error:
+                    # the adapter is gone (unplugged): say so and end, or the
+                    # page only saw every frame refused (review #3 L5)
+                    log("%s lost: %s" % (self.interface, error))
+                    self.ws.send_text("".join(lines) + "#X%s was lost on the robot: %s\r" % (self.interface, error))
                     self.stop.set()
-                    break
+                    self.ws.close()
+                    return
                 can_id, dlc, data = CAN_FRAME.unpack(packet)
                 data = data[:min(dlc, 8)]
                 if can_id & CAN_ERR_FLAG:
@@ -563,14 +623,31 @@ def main():
     if args.listen != "127.0.0.1":
         log("in the Super App choose Robot and enter this computer's address (%s)" % local_addresses())
     throttle = LoginThrottle()
+    # the login path only where the window is served (review #3 L9: through
+    # the tunnel a website could rebind its name to 127.0.0.1 and guess)
+    allow_login = args.listen not in ("127.0.0.1", "::1", "localhost")
+    # connections at once (review #3 L4: ~1000 idle ones ended the relay)
+    slots = threading.BoundedSemaphore(8)
 
     current = {"session": None}
     lock = threading.Lock()
 
     def serve(client, address):
-        client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
-            kind = handshake(client, origins, address[0] in ("127.0.0.1", "::1"))
+            serve_one(client, address)
+        except (ConnectionError, OSError, ValueError, struct.error):
+            try:
+                client.close()
+            except OSError:
+                pass
+        finally:
+            slots.release()
+
+    def serve_one(client, address):
+        client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        client.settimeout(10.0)  # the request and the login line; then none
+        try:
+            kind = handshake(client, origins, address[0] in ("127.0.0.1", "::1"), allow_login)
         except OSError:
             kind = None
         if kind is None:
@@ -586,16 +663,20 @@ def main():
                 ws.close()
                 return
             user, _, password = first[2:].partition("\t")
-            throttle.wait()
-            if not first.startswith("#L") or not user or not check_login(user, password):
-                throttle.failed()
+            if not first.startswith("#L") or not user or not throttle.run(
+                    address[0], lambda: check_login(user, password, address[0])):
                 log("refused a login as %r from %s" % (user[:32], address[0]))
                 ws.send_text("#XWrong username or password\r")
                 ws.close()
                 return
             log("%s logged in from %s" % (user, address[0]))
-            ws.send_text("#A\r")
+        client.settimeout(None)
+        ws.max_message = 65536
         session = Session(ws, args.can)
+        if not session.open():
+            return
+        if kind == "login":
+            ws.send_text("#A\r")
         with lock:
             previous, current["session"] = current["session"], session
         if previous is not None:
@@ -614,8 +695,20 @@ def main():
 
     try:
         while True:
-            client, address = server.accept()
-            threading.Thread(target=serve, args=(client, address), daemon=True).start()
+            try:
+                client, address = server.accept()
+            except OSError as error:  # out of file descriptors: wait, go on
+                log("accept failed: %s" % error)
+                time.sleep(0.5)
+                continue
+            if not slots.acquire(blocking=False):
+                client.close()  # busy: 8 connections already
+                continue
+            try:
+                threading.Thread(target=serve, args=(client, address), daemon=True).start()
+            except RuntimeError:
+                slots.release()
+                client.close()
     except KeyboardInterrupt:
         pass
     finally:

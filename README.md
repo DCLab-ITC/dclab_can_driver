@@ -136,6 +136,10 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.2.1: DCLab Link 3.1 (review #3): login checks one at a time with per-address backoff, no empty
+  passwords, account checks (expired/locked), the login only for this computer's own name or address;
+  size and connection limits; a lost CAN adapter is reported; a window that was taken over no longer
+  logs in again.
 - 2.2.0: DCLab Link 3: the Super App connects from the robot's login window, nothing to install on
   the laptop (parameter `superapp_link_lan`).
 - 2.1.0: the node runs DCLab Link for the Super App (parameter `superapp_link`).
