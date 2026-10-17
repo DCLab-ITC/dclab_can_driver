@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
-"""DCLab Link: use the robot's CAN-USB from the Super App over SSH.
+"""DCLab Link: use the robot's CAN-USB from the Super App.
 
 The robot needs no internet: the configuration computer opens the Super App
-(online) and reaches this relay through an SSH tunnel. The relay carries the
-same slcan text the page speaks to a CANable, and puts the frames on the
-robot's SocketCAN interface (a CANable with candleLight firmware is `can0`
-through the kernel gs_usb driver; an slcan CANable works after
-`slcand -o -s8 /dev/ttyACM0 can0`). Shared with ROS or anything else on can0.
+(online). The relay carries the same slcan text the page speaks to a CANable,
+and puts the frames on the robot's SocketCAN interface (a CANable with
+candleLight firmware is `can0` through the kernel gs_usb driver; an slcan
+CANable works after `slcand -o -s8 /dev/ttyACM0 can0`). Shared with ROS or
+anything else on can0.
 
 The ROS 2 can_driver starts it by itself (parameter superapp_link, default
-on), as a separate low-priority process so it never slows the driver; then
-the configuration computer only needs the tunnel:
+on), as a separate low-priority process so it never slows the driver.
+
+Connect from the Super App (nothing to install on the computer; owner
+2026-10-17): choose "Robot", type the robot's address, Connect. A small
+window from this relay asks for the robot computer's login (the account that
+runs it, checked by the robot's own system as for SSH) and links the page to
+can0 while it stays open. Or through an SSH tunnel, as before:
 
     ssh -N -L 48791:127.0.0.1:48791 USER@ROBOT
 
-Run from the configuration computer (one command, stops when SSH closes):
-
-    ssh -L 48791:127.0.0.1:48791 USER@ROBOT python3 dclab_link.py
-
-then choose "Robot over SSH" in the Super App and Connect.
-
-Safe by design: it listens on 127.0.0.1 only (reachable only through SSH),
-accepts browser pages only from the Super App's own site, and opens the CAN
-interface only while a page is connected - idle, it sends nothing. The kernel
-hands it only the boards' answers to the Super App (DCLab management frames),
-not the robot's own traffic, and it runs at low CPU priority. One page
-at a time; a newer one takes over. Python 3.6+, standard library only.
+Safe by design: CAN only after the robot's login (or through SSH), browser
+pages only from the Super App's site or this relay's own window, can0 opened
+only while a page is connected - idle, it sends nothing. The kernel hands it
+only the boards' answers to the Super App (DCLab management frames), not the
+robot's own traffic, and it runs at low CPU priority. One page at a time; a
+newer one takes over. Python 3.6+, standard library only.
 """
 import argparse
 import base64
@@ -39,7 +38,7 @@ import sys
 import threading
 import time
 
-VERSION = "2"
+VERSION = "3"
 DEFAULT_ORIGINS = ("https://superapp-v2.dclab.live",)
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 CAN_FRAME = struct.Struct("=IB3x8s")
@@ -168,13 +167,13 @@ class WebSocket:
         self.sock.close()
 
 
-def handshake(sock, origins):
-    """Read the HTTP upgrade; returns True when accepted."""
+def read_request(sock):
+    """(request line, headers) of one HTTP request, or None."""
     request = b""
     while b"\r\n\r\n" not in request:
         chunk = sock.recv(4096)
         if not chunk or len(request) > 16384:
-            return False
+            return None
         request += chunk
     lines = request.split(b"\r\n\r\n")[0].decode("latin-1").split("\r\n")
     headers = {}
@@ -182,21 +181,224 @@ def handshake(sock, origins):
         if ":" in line:
             key, value = line.split(":", 1)
             headers[key.strip().lower()] = value.strip()
+    return lines[0], headers
+
+
+def handshake(sock, origins, loopback):
+    """Serve the login window, or accept a WebSocket. Returns None (done),
+    "tunnel" (the Super App through SSH: the robot's login was SSH's) or
+    "login" (this relay's own window: the robot's login comes first)."""
+    parsed = read_request(sock)
+    if parsed is None:
+        return None
+    request_line, headers = parsed
+    parts = request_line.split(" ")
+    path = parts[1] if len(parts) > 1 else "/"
     origin = headers.get("origin")
+    own = "http://" + headers.get("host", "")
     key = headers.get("sec-websocket-key")
-    if not key or headers.get("upgrade", "").lower() != "websocket":
+    if headers.get("upgrade", "").lower() != "websocket":
+        if parts[0] == "GET" and path.split("?")[0] in ("/", "/link"):
+            body = window_page(origins)
+            sock.sendall(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                          "Content-Length: %d\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\n"
+                          "Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n" % len(body)).encode() + body)
+        else:
+            sock.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        return None
+    # Browsers always send Origin. The Super App's site only through the SSH
+    # tunnel (loopback); this relay's own window from anywhere, after the
+    # robot's login; nothing else (another site in the same browser must not
+    # drive the robot's bus).
+    if not key:
         sock.sendall(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-        return False
-    # Browsers always send Origin: only the Super App's own pages may drive
-    # the robot's bus (another site open in the same browser must not).
-    if origin is not None and origin not in origins:
-        log("refused a page from %s (allowed: %s)" % (origin, ", ".join(origins)))
+        return None
+    if loopback and (origin is None or origin in origins):
+        kind = "tunnel"  # (no Origin: a program on this computer, not a browser)
+    elif origin == own and path.split("?")[0] == "/link":
+        kind = "login"
+    else:
+        log("refused a page from %s" % origin)
         sock.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-        return False
+        return None
     accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
     sock.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                   "Connection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n" % accept).encode())
-    return True
+    return kind
+
+
+# --- the robot computer's own login (PAM, as SSH checks it) ---
+
+def check_login(user, password):
+    """True when PAM accepts user/password. Without root only the account
+    running this relay can be checked (pam_unix's unix_chkpwd)."""
+    import ctypes
+    import ctypes.util
+    names = (ctypes.util.find_library("pam"), "libpam.so.0")
+    libpam = None
+    for name in names:
+        try:
+            libpam = ctypes.CDLL(name) if name else None
+        except OSError:
+            libpam = None
+        if libpam is not None:
+            break
+    libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+    if libpam is None:
+        log("PAM is not available on this computer: logins cannot be checked")
+        return False
+
+    class Message(ctypes.Structure):
+        _fields_ = [("msg_style", ctypes.c_int), ("msg", ctypes.c_char_p)]
+
+    class Response(ctypes.Structure):
+        _fields_ = [("resp", ctypes.c_void_p), ("resp_retcode", ctypes.c_int)]
+
+    CONV = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.POINTER(Message)),
+                            ctypes.POINTER(ctypes.POINTER(Response)), ctypes.c_void_p)
+
+    class Conv(ctypes.Structure):
+        _fields_ = [("conv", CONV), ("appdata_ptr", ctypes.c_void_p)]
+
+    libc.calloc.restype = ctypes.c_void_p
+    libc.calloc.argtypes = (ctypes.c_size_t, ctypes.c_size_t)
+    libc.strdup.restype = ctypes.c_void_p
+    libc.strdup.argtypes = (ctypes.c_char_p,)
+    secret = password.encode("utf-8")
+
+    def conversation(count, messages, responses, _data):
+        # PAM frees what it is given: allocated with the C library
+        block = libc.calloc(count, ctypes.sizeof(Response))
+        if not block:
+            return 5  # PAM_BUF_ERR
+        answers = ctypes.cast(block, ctypes.POINTER(Response))
+        for i in range(count):
+            if messages[i].contents.msg_style == 1:  # PAM_PROMPT_ECHO_OFF: the password
+                answers[i].resp = libc.strdup(secret)
+        responses[0] = answers
+        return 0
+
+    handle = ctypes.c_void_p()
+    conv = Conv(CONV(conversation), None)
+    libpam.pam_start.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.POINTER(Conv),
+                                 ctypes.POINTER(ctypes.c_void_p))
+    libpam.pam_authenticate.argtypes = (ctypes.c_void_p, ctypes.c_int)
+    libpam.pam_end.argtypes = (ctypes.c_void_p, ctypes.c_int)
+    if libpam.pam_start(b"login", user.encode("utf-8"), ctypes.byref(conv), ctypes.byref(handle)) != 0:
+        return False
+    result = libpam.pam_authenticate(handle, 0)
+    libpam.pam_end(handle, result)
+    return result == 0
+
+
+class LoginThrottle:
+    """Guessing over the network: after 5 failures within a minute every
+    further attempt waits (2 s more each, up to 30 s)."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.failures = []
+
+    def wait(self):
+        with self.lock:
+            now = time.monotonic()
+            self.failures = [t for t in self.failures if now - t < 60.0]
+            extra = len(self.failures) - 4
+        if extra > 0:
+            time.sleep(min(30.0, 2.0 * extra))
+
+    def failed(self):
+        with self.lock:
+            self.failures.append(time.monotonic())
+
+
+WINDOW_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DCLab robot link</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f7f9;--fg:#1d2330;--muted:#5b6475;--line:#d5d9e0;--accent:#2563eb;--bad:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--fg:#e7eaf0;--muted:#9aa3b2;--line:#323844;--accent:#6ea0ff;--bad:#ff8a80}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 system-ui,sans-serif}
+main{max-width:340px;margin:0 auto;padding:20px 16px}
+h1{font-size:17px;margin:0 0 4px}p{margin:6px 0;color:var(--muted)}
+label{display:block;margin:10px 0 2px;font-size:13px;color:var(--muted)}
+input{box-sizing:border-box;width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg);font:inherit}
+button{margin-top:14px;width:100%;padding:9px;border:0;border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+#status.bad{color:var(--bad)}.hidden{display:none}
+</style></head><body><main>
+<h1>Robot link: HOSTNAME</h1>
+<form id="login">
+<p>Log in with this robot computer's account (the one that runs can_driver).</p>
+<label for="user">Username</label><input id="user" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+<label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
+<button type="submit">Connect</button>
+</form>
+<p id="status" role="status"></p>
+</main><script>
+"use strict";
+const ORIGINS = ORIGIN_LIST;
+let ws = null, ready = false, opener = null, login = null, retries = 0;
+const status = document.getElementById("status");
+const say = (text, bad) => { status.textContent = text; status.className = bad ? "bad" : ""; };
+const post = (message) => { if (opener) window.opener.postMessage(Object.assign({dclabLink: 1}, message), opener); };
+if (!window.opener) say("Open this from the Super App: Robot, then Connect.", true);
+window.addEventListener("message", (event) => {
+  if (event.source !== window.opener || !ORIGINS.includes(event.origin)) return;
+  const m = event.data;
+  if (!m || m.dclabLink !== 1) return;
+  opener = event.origin;
+  if (m.type === "hello") post({type: ready ? "ready" : "waiting"});
+  else if (m.type === "data" && ready && ws && ws.readyState === 1) ws.send(String(m.text));
+  else if (m.type === "close") { ready = false; if (ws) ws.close(); window.close(); }
+});
+function connect() {
+  ws = new WebSocket("ws://" + location.host + "/link");
+  let accepted = false, buffer = "";
+  ws.onopen = () => ws.send("#L" + login.user + "\\t" + login.password + "\\r");
+  ws.onmessage = (event) => {
+    let text = String(event.data);
+    if (!accepted) {
+      buffer += text;
+      const end = buffer.indexOf("\\r");
+      if (end < 0) return;
+      const first = buffer.slice(0, end); text = buffer.slice(end + 1); buffer = "";
+      if (first !== "#A") {
+        login = null; ws.onclose = null; ws.close();
+        say(first.startsWith("#X") ? first.slice(2) : "The robot refused the login.", true);
+        document.getElementById("login").classList.remove("hidden");
+        if (ready) { ready = false; post({type: "fatal", message: "The robot refused the login"}); }
+        return;
+      }
+      accepted = true; retries = 0; ready = true;
+      document.getElementById("login").classList.add("hidden");
+      say("Connected. Keep this window open (you can minimise it); closing it ends the link.");
+      post({type: "ready"});
+      if (!text) return;
+    }
+    post({type: "data", text});
+  };
+  ws.onclose = () => {
+    if (!accepted) { if (!ready) say("Cannot reach DCLab Link on this robot.", true); return; }
+    if (login && retries < 5) { retries += 1; say("Reconnecting to the robot..."); setTimeout(connect, 500 * retries); return; }
+    ready = false; post({type: "fatal", message: "The robot link closed"});
+    say("The robot link closed.", true);
+  };
+}
+document.getElementById("login").addEventListener("submit", (event) => {
+  event.preventDefault();
+  login = {user: document.getElementById("user").value.trim(), password: document.getElementById("password").value};
+  document.getElementById("password").value = "";
+  say("Checking the login...");
+  connect();
+});
+window.addEventListener("pagehide", () => post({type: "fatal", message: "The robot window was closed"}));
+</script></body></html>
+"""
+
+
+def window_page(origins):
+    page = WINDOW_PAGE.replace("HOSTNAME", socket.gethostname())
+    return page.replace("ORIGIN_LIST", "[" + ", ".join('"%s"' % o for o in origins) + "]").encode("utf-8")
 
 
 # --- one page session: WebSocket <-> SocketCAN ---
@@ -208,7 +410,7 @@ class Session:
         self.can = None
         self.stop = threading.Event()
 
-    def run(self):
+    def run(self, messages):
         try:
             self.can = socket.socket(socket.AF_CAN, socket.SOCK_RAW, socket.CAN_RAW)
             self.can.setsockopt(SOL_CAN_RAW, CAN_RAW_FILTER, MGMT_FILTER)
@@ -223,7 +425,7 @@ class Session:
         reader.start()
         pending = ""
         try:
-            for message in self.ws.messages():
+            for message in messages:
                 pending += message
                 while "\r" in pending:
                     line, pending = pending.split("\r", 1)
@@ -301,10 +503,26 @@ def interface_state(interface):
         return None
 
 
+def local_addresses():
+    """This computer's IPv4 addresses on its networks (for the log)."""
+    found = []
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.connect(("192.0.2.1", 9))  # no packet is sent: picks the outgoing address
+        found.append(probe.getsockname()[0])
+        probe.close()
+    except OSError:
+        pass
+    return ", ".join(found + [socket.gethostname() + ".local"])
+
+
 def main():
     parser = argparse.ArgumentParser(description="DCLab Link: the robot's CAN for the Super App over SSH.")
     parser.add_argument("--can", default="can0", help="SocketCAN interface (default can0)")
-    parser.add_argument("--port", type=int, default=48791, help="local port (default 48791)")
+    parser.add_argument("--port", type=int, default=48791, help="port (default 48791)")
+    parser.add_argument("--listen", default="0.0.0.0",
+                        help="address to listen on (default all: the Super App's robot window; "
+                             "127.0.0.1 = through an SSH tunnel only)")
     parser.add_argument("--allow-origin", action="append", default=[],
                         help="another Super App site allowed to connect (repeatable)")
     parser.add_argument("--parent", type=int, default=0, metavar="PID",
@@ -336,12 +554,15 @@ def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        server.bind(("127.0.0.1", args.port))
+        server.bind((args.listen, args.port))
     except OSError as error:
         sys.exit("port %d is busy (%s): is DCLab Link already running?" % (args.port, error))
     server.listen(4)
-    log("DCLab Link %s: %s on 127.0.0.1:%d, waiting for the Super App (Ctrl-C to stop)"
-        % (VERSION, args.can, args.port))
+    log("DCLab Link %s: %s on %s:%d, waiting for the Super App (Ctrl-C to stop)"
+        % (VERSION, args.can, args.listen, args.port))
+    if args.listen != "127.0.0.1":
+        log("in the Super App choose Robot and enter this computer's address (%s)" % local_addresses())
+    throttle = LoginThrottle()
 
     current = {"session": None}
     lock = threading.Lock()
@@ -349,13 +570,32 @@ def main():
     def serve(client, address):
         client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
-            if not handshake(client, origins):
-                client.close()
-                return
+            kind = handshake(client, origins, address[0] in ("127.0.0.1", "::1"))
         except OSError:
+            kind = None
+        if kind is None:
             client.close()
             return
-        session = Session(WebSocket(client), args.can)
+        ws = WebSocket(client)
+        messages = ws.messages()
+        if kind == "login":
+            # the robot computer's login first; only then may it take over
+            try:
+                first = next(messages).split("\r", 1)[0]
+            except (StopIteration, ConnectionError, OSError):
+                ws.close()
+                return
+            user, _, password = first[2:].partition("\t")
+            throttle.wait()
+            if not first.startswith("#L") or not user or not check_login(user, password):
+                throttle.failed()
+                log("refused a login as %r from %s" % (user[:32], address[0]))
+                ws.send_text("#XWrong username or password\r")
+                ws.close()
+                return
+            log("%s logged in from %s" % (user, address[0]))
+            ws.send_text("#A\r")
+        session = Session(ws, args.can)
         with lock:
             previous, current["session"] = current["session"], session
         if previous is not None:
@@ -366,7 +606,7 @@ def main():
                 pass
             previous.ws.close()
         log("page connected")
-        session.run()
+        session.run(messages)
         with lock:
             if current["session"] is session:
                 current["session"] = None

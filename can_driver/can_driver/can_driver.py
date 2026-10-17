@@ -34,10 +34,13 @@ class CanDriver(Node, can.Listener):
         # passwordless sudo for `ip`); set false when the system does it.
         self.configure_interface = bool(self.declare_parameter("configure_interface", True).value)
         self.log_rates = bool(self.declare_parameter("log_rates", False).value)
-        # DCLab Link for the Super App's "Robot over SSH" (dclab_link.py): a
+        # DCLab Link for the Super App's "Robot" connection (dclab_link.py): a
         # separate low-priority process, so it never slows this node; idle
-        # (sends nothing) until a page connects through an SSH tunnel.
+        # (sends nothing) until a page connects: from the robot's login
+        # window on the network (the robot computer's account), or through an
+        # SSH tunnel. superapp_link_lan false = SSH tunnel only.
         self.superapp_link = bool(self.declare_parameter("superapp_link", True).value)
+        self.superapp_link_lan = bool(self.declare_parameter("superapp_link_lan", True).value)
         self.link = None
         self.link_started = 0.0
         self.link_backoff = 30.0
@@ -127,7 +130,8 @@ class CanDriver(Node, can.Listener):
         script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dclab_link.py")
         try:
             self.link = subprocess.Popen(
-                [sys.executable, script, "--can", self.channel, "--parent", str(os.getpid())],
+                [sys.executable, script, "--can", self.channel, "--parent", str(os.getpid()),
+                 "--listen", "0.0.0.0" if self.superapp_link_lan else "127.0.0.1"],
                 stdin=subprocess.DEVNULL)
         except OSError as error:
             self.get_logger().warn(f"DCLab Link not started: {error}")

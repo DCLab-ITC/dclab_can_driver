@@ -35,25 +35,34 @@ The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up wit
 | `swerve_feedback_ids` | `[0, -1]` (none) | V1 Swerve Controller feedback IDs |
 | `imu_id` | `1000` | IMU quaternion ID |
 | `log_rates` | `false` | log frames per second |
-| `superapp_link` | `true` | run DCLab Link for the Super App's Robot over SSH (see below) |
+| `superapp_link` | `true` | run DCLab Link for the Super App's Robot connection (see below) |
+| `superapp_link_lan` | `true` | DCLab Link reachable on the robot's network (login with the robot computer's account); `false` = through SSH only |
 
 Example: `ros2 run can_driver can_driver_node --ros-args -p encoder_ids:="[101, 104, 151, 152]"`
 
-## Super App (Robot over SSH)
+## Super App (Robot)
 
 While the node runs, it also runs DCLab Link (`can_driver/dclab_link.py`), so the Super App can
-configure and update the robot's boards from a laptop. On the laptop, keep this open and choose
-Robot over SSH in the Super App:
+configure and update the robot's boards from a laptop on the same network, with nothing to install
+on the laptop and no internet on the robot. In the Super App choose Robot, type the robot's address
+(the node logs it, e.g. `192.168.1.20`) and Connect: a small window from the robot asks for the
+robot computer's login - the account that runs this node, checked by the robot's own system as SSH
+does. Keep that window open while you work (it can be minimised); closing it ends the link.
+
+Without the window, through an SSH tunnel (also works with `superapp_link_lan:=false`): keep this
+open on the laptop, choose Robot with the address left empty, Connect:
 
     ssh -N -L 48791:127.0.0.1:48791 USER@ROBOT
 
-DCLab Link is a separate process at low CPU priority, so it does not slow the node: it listens on
-127.0.0.1 only (reachable through SSH), sends nothing until a page connects, and the kernel passes
-it only the boards' answers to the Super App, not the robot's own traffic. It stops with the node.
-Measured on a Jetson with 3000 frames/s on the bus and a page connected: no change in the node's
-receive latency (p99 about 1.5 ms either way), no frames lost. Turn it off with
-`-p superapp_link:=false`; without ROS, run it alone with `ros2 run can_driver dclab_link` or
-`python3 dclab_link.py`.
+DCLab Link is a separate process at low CPU priority, so it does not slow the node. It opens the
+CAN interface only while a page is connected and after the robot's login (repeated wrong passwords
+are slowed down), takes pages only from the Super App's site or its own window, and the kernel
+passes it only the boards' answers to the Super App, not the robot's own traffic. It stops with
+the node. Measured on a Jetson with 3000 frames/s on the bus and a page connected: no change in
+the node's receive latency (p99 about 1.5 ms either way), no frames lost. The login crosses the
+network unencrypted (plain http on the robot): use it on the lab network, or the SSH tunnel
+elsewhere. Turn it off with `-p superapp_link:=false`; without ROS, run it alone with
+`ros2 run can_driver dclab_link` or `python3 dclab_link.py`.
 
 ## Topics
 
@@ -127,6 +136,8 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.2.0: DCLab Link 3: the Super App connects from the robot's login window, nothing to install on
+  the laptop (parameter `superapp_link_lan`).
 - 2.1.0: the node runs DCLab Link for the Super App (parameter `superapp_link`).
 
 - The package runs with `ros2 run`. It uses package-relative imports; the old ones only worked from inside the source folder.
