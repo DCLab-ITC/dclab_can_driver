@@ -65,5 +65,6 @@ if ! command -v colcon >/dev/null; then
   fi
 fi
 cd "$(dirname "$src")"
-colcon build --packages-select custom_messages can_driver can_driver_c
+rm -rf build/can_driver_c install/can_driver_c  # renamed can_driver_cpp in 2.5.0
+colcon build --packages-select custom_messages can_driver can_driver_cpp
 echo "Done. Run 'source install/setup.bash' in open terminals and restart the node."

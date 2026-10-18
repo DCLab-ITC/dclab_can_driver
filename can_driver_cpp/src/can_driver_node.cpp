@@ -36,7 +36,7 @@
 #include <vector>
 
 #include "ament_index_cpp/get_package_prefix.hpp"
-#include "can_driver_c/dclab_frames.hpp"
+#include "can_driver_cpp/dclab_frames.hpp"
 #include "canable_reclaim.hpp"
 #include "custom_messages/msg/dc_lab_motor_command.hpp"
 #include "custom_messages/msg/digital_and_analog_feedback.hpp"
@@ -175,7 +175,7 @@ public:
     subscriptions_.push_back(create_subscription<msg::VescCommand>(
         "/publish_vesc", 10, [this](const msg::VescCommand & m) {vesc_command(m);}));
 
-    link_script_ = ament_index_cpp::get_package_prefix("can_driver_c") + "/lib/can_driver_c/dclab_link.py";
+    link_script_ = ament_index_cpp::get_package_prefix("can_driver_cpp") + "/lib/can_driver_cpp/dclab_link.py";
     bus_thread_ = std::thread(&CanDriver::bus_loop, this);
     rates_timer_ = create_wall_timer(1s, [this] {report_rates();});
     link_timer_ = create_wall_timer(2s, [this] {ensure_link();});

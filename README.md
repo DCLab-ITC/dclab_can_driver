@@ -3,7 +3,7 @@
 ROS 2 packages that connect a SocketCAN bus to the DCLab boards and to common motor controllers:
 
 - `can_driver`: the Python node.
-- `can_driver_c`: the same node in C++, faster (see [C++ node](#c-node-can_driver_c)).
+- `can_driver_cpp`: the same node in C++, faster (see [C++ node](#c-node-can_driver_cpp)).
 - `custom_messages`: their messages.
 
 The node supports:
@@ -19,17 +19,17 @@ git clone https://github.com/DCLab-ITC/dclab_can_driver.git
 sudo apt install python3-can
 cd ~/ros2_ws && colcon build && source install/setup.bash
 ros2 run can_driver can_driver_node      # Python
-ros2 run can_driver_c can_driver_node    # or C++
+ros2 run can_driver_cpp can_driver_node    # or C++
 ```
 
 The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up with `sudo -n ip link set can0 up type can bitrate 1000000`. That needs passwordless `sudo` for `ip`. Alternatively, bring the interface up yourself and set `configure_interface:=false`. If the bus disappears (for example, a USB adapter is unplugged), the node reopens it every 2 s.
 
-## C++ node (can_driver_c)
+## C++ node (can_driver_cpp)
 
-`ros2 run can_driver_c can_driver_node` runs the C++ build. It has the same node name, topics,
+`ros2 run can_driver_cpp can_driver_node` runs the C++ build. It has the same node name, topics,
 parameters and frames as the Python node, so it replaces it with no other change (run one of the two,
 not both). It also runs DCLab Link and takes the CANable back like the Python node. Its frame code is
-checked against the Python node's (`can_driver_c/test`), and both nodes gave identical messages and
+checked against the Python node's (`can_driver_cpp/test`), and both nodes gave identical messages and
 frames for the same input.
 
 Measured on a Jetson (4 cores, ROS 2 Humble): a bus of encoder frames (DLC 8, two positions each, so
@@ -178,6 +178,9 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.5.0: the C++ package is named `can_driver_cpp` (was `can_driver_c`): run it with
+  `ros2 run can_driver_cpp can_driver_node`. After updating, delete `build/can_driver_c` and
+  `install/can_driver_c` in the workspace.
 - 2.4.0: `can_driver_c`, the C++ node (same topics and parameters, about half the CPU, no losses
   at 5000 frames/s); `update.sh` builds it too.
 - 2.3.0: the node takes the CANable back from the Super App's browser when `can0` is missing

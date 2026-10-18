@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(can_driver_c)
+project(can_driver_cpp)
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
