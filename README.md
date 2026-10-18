@@ -1,9 +1,10 @@
 # DCLab CAN driver for ROS 2
 
-Two ROS 2 packages that connect a SocketCAN bus to the DCLab boards and to common motor controllers:
+ROS 2 packages that connect a SocketCAN bus to the DCLab boards and to common motor controllers:
 
 - `can_driver`: the Python node.
-- `custom_messages`: its messages.
+- `can_driver_c`: the same node in C++, faster (see [C++ node](#c-node-can_driver_c)).
+- `custom_messages`: their messages.
 
 The node supports:
 
@@ -17,16 +18,40 @@ cd ~/ros2_ws/src
 git clone https://github.com/DCLab-ITC/dclab_can_driver.git
 sudo apt install python3-can
 cd ~/ros2_ws && colcon build && source install/setup.bash
-ros2 run can_driver can_driver_node
+ros2 run can_driver can_driver_node      # Python
+ros2 run can_driver_c can_driver_node    # or C++
 ```
 
 The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up with `sudo -n ip link set can0 up type can bitrate 1000000`. That needs passwordless `sudo` for `ip`. Alternatively, bring the interface up yourself and set `configure_interface:=false`. If the bus disappears (for example, a USB adapter is unplugged), the node reopens it every 2 s.
 
+## C++ node (can_driver_c)
+
+`ros2 run can_driver_c can_driver_node` runs the C++ build. It has the same node name, topics,
+parameters and frames as the Python node, so it replaces it with no other change (run one of the two,
+not both). It also runs DCLab Link and takes the CANable back like the Python node. Its frame code is
+checked against the Python node's (`can_driver_c/test`), and both nodes gave identical messages and
+frames for the same input.
+
+Measured on a Jetson (4 cores, ROS 2 Humble): a bus of encoder frames (DLC 8, two positions each, so
+two messages per frame) for 10 s on a virtual CAN interface; latency is from the frame on the bus to
+the message in a C++ subscriber.
+
+| frames/s | node | CPU (one core = 100%) | messages lost | latency p50 | p99 | max |
+|---|---|---|---|---|---|---|
+| 1000 | Python | 59% | 0% | 0.58 ms | 6.4 ms | 15 ms |
+| 1000 | C++ | 38% | 0% | 0.59 ms | 5.0 ms | 13 ms |
+| 3000 | Python | 109% | 2.5% | 38 ms | 170 ms | 197 ms |
+| 3000 | C++ | 53% | 0% | 0.24 ms | 6.4 ms | 16 ms |
+| 5000 | Python | 113% (saturated) | 37% | 86 ms | 128 ms | 142 ms |
+| 5000 | C++ | 61% | 0% | 0.17 ms | 10 ms | 22 ms |
+
+Below about 1000 frames/s both are fast enough; on a busy bus the Python node falls behind (its
+latency grows and frames are dropped), the C++ node does not.
+
 ## Update
 
 Run `./update.sh` in the `dclab_can_driver` folder. It pulls the latest version from GitHub (a
-git clone) or replaces the folder with it (a copy from a .zip), then rebuilds the two packages with
-colcon. A robot without internet: copy `dclab_can_driver.zip` from the Super App's Downloads to it
+git clone) or replaces the folder with it (a copy from a .zip), then rebuilds the packages with colcon. A robot without internet: copy `dclab_can_driver.zip` from the Super App's Downloads to it
 and run `./update.sh dclab_can_driver.zip`. Restart the node afterwards.
 
 ## CANable and the Super App on the same computer
@@ -153,6 +178,8 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.4.0: `can_driver_c`, the C++ node (same topics and parameters, about half the CPU, no losses
+  at 5000 frames/s); `update.sh` builds it too.
 - 2.3.0: the node takes the CANable back from the Super App's browser when `can0` is missing
   (parameter `take_canable`); `update.sh` updates and rebuilds the driver.
 - 2.2.1: DCLab Link 3.1 (review #3): login checks one at a time with per-address backoff, no empty

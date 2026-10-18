@@ -7,7 +7,7 @@
 #
 # A git clone is pulled (it stops if you changed files in it); a copy from a
 # .zip is replaced (an old copy left in src/ would be a second can_driver).
-# Then colcon builds the two packages in the workspace this folder is in
+# Then colcon builds the packages in the workspace this folder is in
 # (WORKSPACE/src/dclab_can_driver). Restart the node afterwards.
 set -euo pipefail
 
@@ -65,5 +65,5 @@ if ! command -v colcon >/dev/null; then
   fi
 fi
 cd "$(dirname "$src")"
-colcon build --packages-select custom_messages can_driver
+colcon build --packages-select custom_messages can_driver can_driver_c
 echo "Done. Run 'source install/setup.bash' in open terminals and restart the node."
