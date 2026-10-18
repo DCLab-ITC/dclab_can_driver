@@ -22,6 +22,22 @@ ros2 run can_driver can_driver_node
 
 The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up with `sudo -n ip link set can0 up type can bitrate 1000000`. That needs passwordless `sudo` for `ip`. Alternatively, bring the interface up yourself and set `configure_interface:=false`. If the bus disappears (for example, a USB adapter is unplugged), the node reopens it every 2 s.
 
+## Update
+
+Run `./update.sh` in the `dclab_can_driver` folder. It pulls the latest version from GitHub (a
+git clone) or replaces the folder with it (a copy from a .zip), then rebuilds the two packages with
+colcon. A robot without internet: copy `dclab_can_driver.zip` from the Super App's Downloads to it
+and run `./update.sh dclab_can_driver.zip`. Restart the node afterwards.
+
+## CANable and the Super App on the same computer
+
+The Super App's Linux setup (`/etc/udev/rules.d/60-dclab-usb.rules`) takes the CANable away from
+Linux at every plug-in so the browser can use it, which leaves no `can0`. The node has priority:
+when its interface is missing it gives every CANable back to Linux (ending a browser session on it)
+and opens it, with no root needed (the same rule lets every user open the adapter). To configure the
+boards while the node runs, use the Super App's Robot connection: it shares `can0` with the node.
+Turn the takeover off with `-p take_canable:=false`.
+
 ## Parameters
 
 | name | default | meaning |
@@ -29,6 +45,7 @@ The node opens `can0` at 1 Mbit/s. If the interface is down, it brings it up wit
 | `channel` | `can0` | SocketCAN interface |
 | `bitrate` | `1000000` | used when the node brings the interface up |
 | `configure_interface` | `true` | bring the interface up when it is down |
+| `take_canable` | `true` | take a CANable back from the Super App's browser when the interface is missing |
 | `encoder_ids` | `[100, 199, 250, 299]` | `[first, last]` pairs of position feedback IDs (encoders, Smart Driver, Motor Controller) |
 | `speed_filter_alpha` | `0.0` | smoothing of the estimated speed (0 = raw) |
 | `sensor_input_ids` | `[500, 510]` | Sensor digital/analog frame IDs |
@@ -136,6 +153,8 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.3.0: the node takes the CANable back from the Super App's browser when `can0` is missing
+  (parameter `take_canable`); `update.sh` updates and rebuilds the driver.
 - 2.2.1: DCLab Link 3.1 (review #3): login checks one at a time with per-address backoff, no empty
   passwords, account checks (expired/locked), the login only for this computer's own name or address;
   size and connection limits; a lost CAN adapter is reported; a window that was taken over no longer

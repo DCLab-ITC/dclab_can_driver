@@ -15,6 +15,7 @@ import can
 import rclpy
 from rclpy.node import Node
 
+from . import canable_reclaim
 from .ControllerBoard import ControllerBoard
 from .DCLabEncoders import DCLabEncoders
 from .DCLabSensorInputs import DCLabSensorInputs
@@ -34,6 +35,10 @@ class CanDriver(Node, can.Listener):
         # passwordless sudo for `ip`); set false when the system does it.
         self.configure_interface = bool(self.declare_parameter("configure_interface", True).value)
         self.log_rates = bool(self.declare_parameter("log_rates", False).value)
+        # The node before the Super App (owner 2026-10-18): a CANable the
+        # Super App's Linux USB rule took from the kernel is taken back when
+        # the interface is missing (canable_reclaim.py).
+        self.take_canable = bool(self.declare_parameter("take_canable", True).value)
         # DCLab Link for the Super App's "Robot" connection (dclab_link.py): a
         # separate low-priority process, so it never slows this node; idle
         # (sends nothing) until a page connects: from the robot's login
@@ -68,6 +73,12 @@ class CanDriver(Node, can.Listener):
         """Open the SocketCAN bus; on failure the 2 s timer retries."""
         self.close_bus()
         try:
+            if self.take_canable and not os.path.exists("/sys/class/net/" + self.channel):
+                if canable_reclaim.reclaim(self.get_logger().warn):
+                    for _ in range(20):  # the kernel adds the interface
+                        if os.path.exists("/sys/class/net/" + self.channel):
+                            break
+                        time.sleep(0.1)
             if self.configure_interface:
                 state = subprocess.run(["ip", "link", "show", self.channel],
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
