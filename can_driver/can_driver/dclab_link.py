@@ -39,7 +39,7 @@ import sys
 import threading
 import time
 
-VERSION = "3.2"
+VERSION = "3.3"
 DEFAULT_ORIGINS = ("https://superapp-v2.dclab.live",)
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 CAN_FRAME = struct.Struct("=IB3x8s")
@@ -447,7 +447,7 @@ function connect() {
     /* the relay's last word (taken over by another page, the adapter lost):
      * final, no logging in again (review #3 L1: two windows took the link
      * from each other forever) */
-    const fatal = /(?:^|\r)#X([^\r]*)\r/.exec(text);
+    const fatal = /(?:^|\\r)#X([^\\r]*)\\r/.exec(text);
     if (fatal) { ended = fatal[1]; login = null; }
     post({type: "data", text});
   };

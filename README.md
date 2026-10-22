@@ -178,6 +178,8 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.5.2: DCLab Link 3.3 - fixes the robot window: its script never ran (a raw carriage return in a
+  regular expression), so Connect only reloaded the form and the Super App waited. Update every robot.
 - 2.5.1: DCLab Link 3.2 - a refused robot login is shown clearly in the robot window and in the Super App, and names the
   account that works (the one running can_driver; only its password can be checked).
 - 2.5.0: the C++ package is named `can_driver_cpp` (was `can_driver_c`): run it with
