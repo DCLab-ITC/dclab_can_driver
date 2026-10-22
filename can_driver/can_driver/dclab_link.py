@@ -30,6 +30,7 @@ import argparse
 import base64
 import errno
 import hashlib
+import html
 import os
 import select
 import socket
@@ -38,7 +39,7 @@ import sys
 import threading
 import time
 
-VERSION = "3.1"
+VERSION = "3.2"
 DEFAULT_ORIGINS = ("https://superapp-v2.dclab.live",)
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 CAN_FRAME = struct.Struct("=IB3x8s")
@@ -251,6 +252,25 @@ def handshake(sock, origins, loopback, allow_login=True):
 
 # --- the robot computer's own login (PAM, as SSH checks it) ---
 
+def running_account():
+    """The account this relay runs as; without root only its password can be checked."""
+    try:
+        import pwd
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except (ImportError, KeyError):
+        return os.environ.get("USER", "")
+
+
+def login_refusal(user):
+    """What the window shows for a refused login (2026-10-22: a tester typed a
+    different Raspberry Pi account and only saw the form again)."""
+    account = running_account()
+    if os.geteuid() != 0 and account and user != account:
+        return ("Wrong username: this robot accepts only %s "
+                "(the account running can_driver)" % account)
+    return "Wrong username or password"
+
+
 def check_login(user, password, rhost=""):
     """True when PAM accepts user/password and the account may log in now.
     Without root only the account running this relay can be checked
@@ -366,10 +386,12 @@ label{display:block;margin:10px 0 2px;font-size:13px;color:var(--muted)}
 input{box-sizing:border-box;width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg);font:inherit}
 button{margin-top:14px;width:100%;padding:9px;border:0;border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
 #status.bad{color:var(--bad)}.hidden{display:none}
+#error{margin:10px 0;padding:10px 12px;border-radius:6px;border:1px solid var(--bad);color:var(--bad);font-weight:600}
 </style></head><body><main>
 <h1>Robot link: HOSTNAME</h1>
+<div id="error" role="alert" class="hidden"></div>
 <form id="login">
-<p>Log in with this robot computer's account (the one that runs can_driver).</p>
+<p>Log in with ACCOUNT_HINT.</p>
 <label for="user">Username</label><input id="user" autocomplete="username" autocapitalize="off" spellcheck="false" required>
 <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
 <button type="submit">Connect</button>
@@ -405,12 +427,18 @@ function connect() {
       const first = buffer.slice(0, end); text = buffer.slice(end + 1); buffer = "";
       if (first !== "#A") {
         login = null; ws.onclose = null; ws.close();
-        say(first.startsWith("#X") ? first.slice(2) : "The robot refused the login.", true);
+        const reason = first.startsWith("#X") ? first.slice(2) : "The robot refused the login.";
+        say("");
+        const box = document.getElementById("error");
+        box.textContent = reason; box.classList.remove("hidden");
         document.getElementById("login").classList.remove("hidden");
+        document.getElementById("password").focus();
         if (ready) { ready = false; post({type: "fatal", message: "The robot refused the login"}); }
+        else post({type: "refused", message: reason});
         return;
       }
       accepted = true; ready = true; ended = null; connectedAt = Date.now();
+      document.getElementById("error").classList.add("hidden");
       document.getElementById("login").classList.add("hidden");
       say("Connected. Keep this window open (you can minimise it); closing it ends the link.");
       post({type: "ready"});
@@ -438,6 +466,7 @@ document.getElementById("login").addEventListener("submit", (event) => {
   event.preventDefault();
   login = {user: document.getElementById("user").value.trim(), password: document.getElementById("password").value};
   document.getElementById("password").value = "";
+  document.getElementById("error").classList.add("hidden");
   say("Checking the login...");
   connect();
 });
@@ -447,7 +476,13 @@ window.addEventListener("pagehide", () => post({type: "fatal", message: "The rob
 
 
 def window_page(origins):
-    page = WINDOW_PAGE.replace("HOSTNAME", socket.gethostname())
+    account = running_account()
+    if os.geteuid() == 0 or not account:
+        hint = "an account of this computer"
+    else:
+        hint = ("<b>%s</b>, the account running can_driver here "
+                "(only its password can be checked)" % html.escape(account))
+    page = WINDOW_PAGE.replace("HOSTNAME", socket.gethostname()).replace("ACCOUNT_HINT", hint)
     return page.replace("ORIGIN_LIST", "[" + ", ".join('"%s"' % o for o in origins) + "]").encode("utf-8")
 
 
@@ -666,7 +701,7 @@ def main():
             if not first.startswith("#L") or not user or not throttle.run(
                     address[0], lambda: check_login(user, password, address[0])):
                 log("refused a login as %r from %s" % (user[:32], address[0]))
-                ws.send_text("#XWrong username or password\r")
+                ws.send_text("#X%s\r" % login_refusal(user))
                 ws.close()
                 return
             log("%s logged in from %s" % (user, address[0]))
