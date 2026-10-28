@@ -1,5 +1,7 @@
 # DCLab CAN driver for ROS 2
 
+New here? Start with the [user guide](USER_GUIDE.md): setup, driving each kind of motor, reading sensors, troubleshooting.
+
 ROS 2 packages that connect a SocketCAN bus to the DCLab boards and to common motor controllers:
 
 - `can_driver`: the Python node.
