@@ -31,7 +31,9 @@ import base64
 import errno
 import hashlib
 import html
+import json
 import os
+import secrets
 import select
 import socket
 import struct
@@ -39,7 +41,7 @@ import sys
 import threading
 import time
 
-VERSION = "3.4"
+VERSION = "3.5"
 DEFAULT_ORIGINS = ("https://superapp-v2.dclab.live",)
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 CAN_FRAME = struct.Struct("=IB3x8s")
@@ -344,6 +346,90 @@ def check_login(user, password, rhost=""):
     return result == 0
 
 
+REMEMBER_DAYS = 90  # a remembered computer unused this long logs in again
+REMEMBER_MAX = 50
+
+
+class Remembered:
+    """Computers that connect without the password ("Remember this computer",
+    owner 2026-10-28): the robot window keeps a random key, this robot only
+    its SHA-256, in ~/.config/dclab_link/remembered.json (this account only).
+    Forgotten from the window, after REMEMBER_DAYS unused, or all at once
+    with `dclab_link.py --forget-computers`."""
+
+    def __init__(self, path=None):
+        self.path = path or os.path.join(os.path.expanduser("~"), ".config", "dclab_link", "remembered.json")
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def _digest(key):
+        return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+    def _load(self):
+        try:
+            with open(self.path) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        oldest = time.time() - REMEMBER_DAYS * 86400
+        return {digest: entry for digest, entry in data.items()
+                if isinstance(entry, dict) and entry.get("used", 0) > oldest}
+
+    def _save(self, data):
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        temp = self.path + ".tmp"
+        with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            json.dump(data, f)
+        os.replace(temp, self.path)
+
+    def add(self, user, address):
+        """A new key for this computer, "" when it cannot be stored."""
+        key = secrets.token_hex(32)
+        now = int(time.time())
+        with self.lock:
+            data = self._load()
+            data[self._digest(key)] = {"user": user, "from": address, "created": now, "used": now}
+            newest = sorted(data, key=lambda digest: data[digest].get("used", 0))[-REMEMBER_MAX:]
+            try:
+                self._save({digest: data[digest] for digest in newest})
+            except OSError as error:
+                log("cannot remember the computer (%s)" % error)
+                return ""
+        return key
+
+    def check(self, user, key):
+        with self.lock:
+            data = self._load()
+            entry = data.get(self._digest(key))
+            if entry is None or entry.get("user") != user:
+                return False
+            entry["used"] = int(time.time())
+            try:
+                self._save(data)
+            except OSError:
+                pass
+        return True
+
+    def forget(self, user, key):
+        with self.lock:
+            data = self._load()
+            entry = data.get(self._digest(key))
+            if entry is not None and entry.get("user") == user:
+                del data[self._digest(key)]
+                self._save(data)
+
+    def forget_all(self):
+        with self.lock:
+            count = len(self._load())
+            try:
+                os.remove(self.path)
+            except FileNotFoundError:
+                pass
+        return count
+
+
 class LoginThrottle:
     """Guessing over the network: one login check at a time (parallel
     connections all waited, then guessed together: review #3 L3), and after
@@ -386,6 +472,8 @@ label{display:block;margin:10px 0 2px;font-size:13px;color:var(--muted)}
 input{box-sizing:border-box;width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--fg);font:inherit}
 button{margin-top:14px;width:100%;padding:9px;border:0;border-radius:6px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
 #status.bad{color:var(--bad)}.hidden{display:none}
+label.check{display:flex;gap:8px;align-items:center;margin-top:12px}label.check input{width:auto;margin:0}
+button.link{width:auto;margin-top:8px;padding:0;background:none;color:var(--accent);text-decoration:underline}
 #error{margin:10px 0;padding:10px 12px;border-radius:6px;border:1px solid var(--bad);color:var(--bad);font-weight:600}
 </style></head><body><main>
 <h1>Robot link: HOSTNAME</h1>
@@ -394,15 +482,25 @@ button{margin-top:14px;width:100%;padding:9px;border:0;border-radius:6px;backgro
 <p>Log in with ACCOUNT_HINT.</p>
 <label for="user">Username</label><input id="user" autocomplete="username" autocapitalize="off" spellcheck="false" required>
 <label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
+<label class="check"><input id="remember" type="checkbox" checked>Remember this computer (no password next time)</label>
 <button type="submit">Connect</button>
 </form>
 <p id="status" role="status"></p>
+<button type="button" id="forget" class="link hidden">Forget this computer</button>
 </main><script>
 "use strict";
 const ORIGINS = ORIGIN_LIST;
 let ws = null, ready = false, opener = null, login = null, retries = 0, connectedAt = 0, ended = null, acceptedUser = "", prefilled = false;
 const status = document.getElementById("status");
 const say = (text, bad) => { status.textContent = text; status.className = bad ? "bad" : ""; };
+/* "Remember this computer" (owner 2026-10-28): {user, key} in this window's
+ * own storage (this robot's address, never the Super App's); the robot keeps
+ * only the key's hash */
+const REMEMBER = "dclab.rememberedLogin";
+const remembered = () => { try { const r = JSON.parse(localStorage.getItem(REMEMBER) || "null"); return r && r.user && r.key ? r : null; } catch (_) { return null; } };
+const remember = (value) => { try { if (value) localStorage.setItem(REMEMBER, JSON.stringify(value)); else localStorage.removeItem(REMEMBER); } catch (_) {} };
+const forgetButton = document.getElementById("forget");
+if (window.opener && remembered()) { document.getElementById("login").classList.add("hidden"); say("Connecting as " + remembered().user + "..."); }
 const post = (message) => { if (opener) window.opener.postMessage(Object.assign({dclabLink: 1}, message), opener); };
 if (!window.opener) say("Open this from the Super App: Robot, then Connect.", true);
 window.addEventListener("message", (event) => {
@@ -411,6 +509,9 @@ window.addEventListener("message", (event) => {
   if (!m || m.dclabLink !== 1) return;
   opener = event.origin;
   if (m.type === "hello") {
+    /* a remembered computer connects at once, without the password */
+    const saved = remembered();
+    if (saved && !login && !ready) { login = {user: saved.user, key: saved.key}; connect(); }
     /* the page's saved username for this robot: only the password is typed */
     const user = document.getElementById("user");
     if (!prefilled && typeof m.user === "string" && m.user && !user.value && !login) { user.value = m.user; document.getElementById("password").focus(); }
@@ -423,7 +524,8 @@ window.addEventListener("message", (event) => {
 function connect() {
   ws = new WebSocket("ws://" + location.host + "/link");
   let accepted = false, buffer = "";
-  ws.onopen = () => ws.send("#L" + login.user + "\\t" + login.password + "\\r");
+  ws.onopen = () => ws.send(login.key ? "#T" + login.user + "\\t" + login.key + "\\r"
+    : (login.remember ? "#R" : "#L") + login.user + "\\t" + login.password + "\\r");
   ws.onmessage = (event) => {
     let text = String(event.data);
     if (!accepted) {
@@ -431,7 +533,9 @@ function connect() {
       const end = buffer.indexOf("\\r");
       if (end < 0) return;
       const first = buffer.slice(0, end); text = buffer.slice(end + 1); buffer = "";
-      if (first !== "#A") {
+      if (!first.startsWith("#A")) {
+        /* a remembered key the robot no longer takes: the password again */
+        if (login.key) { remember(null); document.getElementById("user").value = login.user; forgetButton.classList.add("hidden"); }
         login = null; ws.onclose = null; ws.close();
         const reason = first.startsWith("#X") ? first.slice(2) : "The robot refused the login.";
         say("");
@@ -444,6 +548,10 @@ function connect() {
         return;
       }
       accepted = true; ready = true; ended = null; connectedAt = Date.now(); acceptedUser = login.user;
+      /* the robot's key for this computer: reconnects use it, the password is dropped */
+      const key = first.slice(2);
+      if (key) { remember({user: login.user, key}); login = {user: login.user, key}; }
+      forgetButton.classList.toggle("hidden", !remembered());
       document.getElementById("error").classList.add("hidden");
       document.getElementById("login").classList.add("hidden");
       say("Connected. Keep this window open (you can minimise it); closing it ends the link.");
@@ -470,11 +578,21 @@ function connect() {
 }
 document.getElementById("login").addEventListener("submit", (event) => {
   event.preventDefault();
-  login = {user: document.getElementById("user").value.trim(), password: document.getElementById("password").value};
+  login = {user: document.getElementById("user").value.trim(), password: document.getElementById("password").value,
+    remember: document.getElementById("remember").checked};
   document.getElementById("password").value = "";
   document.getElementById("error").classList.add("hidden");
   say("Checking the login...");
   connect();
+});
+forgetButton.addEventListener("click", () => {
+  const saved = remembered();
+  remember(null); forgetButton.classList.add("hidden");
+  say("This computer is forgotten: the next Connect asks for the password.");
+  if (!saved) return;
+  const once = new WebSocket("ws://" + location.host + "/link");
+  once.onopen = () => once.send("#F" + saved.user + "\\t" + saved.key + "\\r");
+  once.onmessage = () => once.close();
 });
 window.addEventListener("pagehide", () => post({type: "fatal", message: "The robot window was closed"}));
 </script></body></html>
@@ -628,7 +746,13 @@ def main():
                         help="another Super App site allowed to connect (repeatable)")
     parser.add_argument("--parent", type=int, default=0, metavar="PID",
                         help="exit when this process (the can_driver node that started it) exits")
+    parser.add_argument("--forget-computers", action="store_true",
+                        help="forget every computer remembered by the robot window, then exit")
     args = parser.parse_args()
+    remembered = Remembered()
+    if args.forget_computers:
+        print("forgot %d remembered computer(s)" % remembered.forget_all())
+        return
     try:
         os.nice(10)  # the robot's own control always comes first
     except OSError:
@@ -703,21 +827,37 @@ def main():
             except (StopIteration, ConnectionError, OSError):
                 ws.close()
                 return
-            user, _, password = first[2:].partition("\t")
-            if not first.startswith("#L") or not user or not throttle.run(
-                    address[0], lambda: check_login(user, password, address[0])):
-                log("refused a login as %r from %s" % (user[:32], address[0]))
-                ws.send_text("#X%s\r" % login_refusal(user))
+            # #L user<TAB>password, #R the same + remember this computer,
+            # #T user<TAB>key (a remembered computer), #F user<TAB>key (forget it)
+            command = first[:2]
+            user, _, secret = first[2:].partition("\t")
+            if command == "#F":
+                remembered.forget(user, secret)
+                log("%s forgot a computer (%s)" % (user[:32], address[0]))
+                ws.send_text("#A\r")
                 ws.close()
                 return
-            log("%s logged in from %s" % (user, address[0]))
+            if command == "#T":
+                ok = bool(user) and throttle.run(address[0], lambda: remembered.check(user, secret))
+                refusal = "This computer is no longer remembered: log in again"
+            else:
+                ok = command in ("#L", "#R") and bool(user) and throttle.run(
+                    address[0], lambda: check_login(user, secret, address[0]))
+                refusal = login_refusal(user)
+            if not ok:
+                log("refused a login as %r from %s" % (user[:32], address[0]))
+                ws.send_text("#X%s\r" % refusal)
+                ws.close()
+                return
+            log("%s logged in from %s%s" % (user, address[0], " (remembered computer)" if command == "#T" else ""))
+            key = remembered.add(user, address[0]) if command == "#R" else ""
         client.settimeout(None)
         ws.max_message = 65536
         session = Session(ws, args.can)
         if not session.open():
             return
         if kind == "login":
-            ws.send_text("#A\r")
+            ws.send_text("#A%s\r" % key)  # the key only to a computer to remember
         with lock:
             previous, current["session"] = current["session"], session
         if previous is not None:

@@ -231,7 +231,9 @@ All parameters are listed in the [README](README.md#parameters).
 The node also runs DCLab Link, so the Super App can reach the robot's boards from a laptop on the
 same network. In the Super App choose **Robot**, type the robot's address (the node logs it) and
 Connect, then log in with the robot computer's account (the one running the node). Keep the small
-robot window open while you work. Without a shared network, use an SSH tunnel instead (see the
+robot window open while you work. Leave "Remember this computer" ticked and later connects skip the
+login; "Forget this computer" in that window, or `ros2 run can_driver dclab_link --forget-computers`
+on the robot (all computers), cancels it. Without a shared network, use an SSH tunnel instead (see the
 README). Turn it off with `-p superapp_link:=false`.
 
 ### Update

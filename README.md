@@ -91,6 +91,11 @@ on the laptop and no internet on the robot. In the Super App choose Robot, type 
 (the node logs it, e.g. `192.168.1.20`) and Connect: a small window from the robot asks for the
 robot computer's login - the account that runs this node, checked by the robot's own system as SSH
 does. Keep that window open while you work (it can be minimised); closing it ends the link.
+With "Remember this computer" (on by default) later connects skip the login: the window keeps a
+random key, the robot only its hash (`~/.config/dclab_link/remembered.json`, readable only by that
+account). A key unused for 90 days expires; "Forget this computer" in the window cancels one, and
+`ros2 run can_driver dclab_link --forget-computers` (or `python3 dclab_link.py --forget-computers`)
+cancels them all, e.g. after a laptop is lost or the password changed.
 
 Without the window, through an SSH tunnel (also works with `superapp_link_lan:=false`): keep this
 open on the laptop, choose Robot with the address left empty, Connect:
@@ -178,6 +183,8 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.7.0: DCLab Link 3.5 - "Remember this computer" in the robot window: later connects need no password
+  (the robot keeps only a hash of the window's key; Forget this computer, `--forget-computers`).
 - 2.6.1: DCLab Link 3.4 - the robot window fills in the username the Super App saved for this robot
   (Saved robot), so only the password is typed, and tells the Super App which account logged in.
 - 2.6.0: removed the V1 Swerve Controller support (`/publish_swerve`, `/swerve_feedback`,
