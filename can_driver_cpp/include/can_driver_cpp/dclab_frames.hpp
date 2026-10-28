@@ -167,15 +167,6 @@ inline Payload controller_digital(const bool * digital, const bool * solenoid)
   return out;
 }
 
-inline Payload swerve_command(float position, float speed)
-{
-  Payload out;
-  out.len = 8;
-  put_le32(out.data, float_bits(position));
-  put_le32(out.data + 4, float_bits(speed));
-  return out;
-}
-
 // IMU quaternion (w, x, y, z), sign-magnitude 16-bit each.
 inline void imu_quaternion(const uint8_t * d, double * wxyz)
 {

@@ -46,8 +46,6 @@
 #include "custom_messages/msg/robomaster_current_command.hpp"
 #include "custom_messages/msg/robomaster_feedback.hpp"
 #include "custom_messages/msg/servo_command.hpp"
-#include "custom_messages/msg/swerve_command.hpp"
-#include "custom_messages/msg/swerve_feedback.hpp"
 #include "custom_messages/msg/vesc_command.hpp"
 #include "custom_messages/msg/vesc_status_four.hpp"
 #include "custom_messages/msg/vesc_status_one.hpp"
@@ -130,12 +128,10 @@ public:
     encoder_ranges_ = ranges("encoder_ids", {100, 199, 250, 299});
     speed_ = dclab::SpeedEstimator(declare_parameter<double>("speed_filter_alpha", 0.0));
     sensor_ranges_ = ranges("sensor_input_ids", {500, 510});
-    swerve_ranges_ = ranges("swerve_feedback_ids", {0, -1});
     imu_id_ = declare_parameter<int64_t>("imu_id", 1000);
 
     encoder_pub_ = create_publisher<msg::EncoderFeedback>("/encoder_feedback", 10);
     sensor_pub_ = create_publisher<msg::DigitalAndAnalogFeedback>("/digital_analog_feedback", 10);
-    swerve_pub_ = create_publisher<msg::SwerveFeedback>("/swerve_feedback", 10);
     imu_pub_ = create_publisher<geometry_msgs::msg::Quaternion>("/imu/quaternion", 10);
     robomaster_pub_ = create_publisher<msg::RobomasterFeedback>("/robomaster_feedback", 10);
     vesc1_pub_ = create_publisher<msg::VescStatusOne>("/vesc_status1", 10);
@@ -161,10 +157,6 @@ public:
           const bool s[6] = {m.solenoid1_value, m.solenoid2_value, m.solenoid3_value,
             m.solenoid4_value, m.solenoid5_value, m.solenoid6_value};
           send(m.can_id, dclab::controller_digital(d, s));
-        }));
-    subscriptions_.push_back(create_subscription<msg::SwerveCommand>(
-        "/publish_swerve", 10, [this](const msg::SwerveCommand & m) {
-          send(m.can_id, dclab::swerve_command(m.position, m.speed));
         }));
     subscriptions_.push_back(create_subscription<msg::RobomasterCurrentCommand>(
         "/publish_robomaster_current", 10, [this](const msg::RobomasterCurrentCommand & m) {
@@ -386,14 +378,6 @@ private:
       sensor_pub_->publish(out);
       return;
     }
-    if (!extended && len == 8 && in_ranges(swerve_ranges_, id)) {
-      msg::SwerveFeedback out;
-      out.can_id = static_cast<uint16_t>(id);
-      out.position = dclab::bits_float(dclab::get_le32(d));
-      out.speed = dclab::bits_float(dclab::get_le32(d + 4));
-      swerve_pub_->publish(out);
-      return;
-    }
     if (!extended && id == imu_id_ && len == 8) {
       double q[4];
       dclab::imu_quaternion(d, q);
@@ -554,7 +538,7 @@ private:
   int64_t bitrate_ = 1000000;
   bool configure_interface_ = true, take_canable_ = true, log_rates_ = false;
   bool superapp_link_ = true, superapp_link_lan_ = true;
-  Ranges encoder_ranges_, sensor_ranges_, swerve_ranges_;
+  Ranges encoder_ranges_, sensor_ranges_;
   int64_t imu_id_ = 1000;
   dclab::SpeedEstimator speed_;
 
@@ -572,7 +556,6 @@ private:
 
   rclcpp::Publisher<msg::EncoderFeedback>::SharedPtr encoder_pub_;
   rclcpp::Publisher<msg::DigitalAndAnalogFeedback>::SharedPtr sensor_pub_;
-  rclcpp::Publisher<msg::SwerveFeedback>::SharedPtr swerve_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Quaternion>::SharedPtr imu_pub_;
   rclcpp::Publisher<msg::RobomasterFeedback>::SharedPtr robomaster_pub_;
   rclcpp::Publisher<msg::VescStatusOne>::SharedPtr vesc1_pub_;

@@ -8,7 +8,7 @@ ROS 2 packages that connect a SocketCAN bus to the DCLab boards and to common mo
 
 The node supports:
 
-- DCLab boards: Smart Driver, Motor Controller, Sensor, Controller, Swerve module, Absolute Encoder and IMU.
+- DCLab boards: Smart Driver, Motor Controller, Sensor, Controller, Absolute Encoder and IMU.
 - Other motor controllers: VESC and DJI RoboMaster C610/C620.
 
 ## Install
@@ -74,7 +74,6 @@ Turn the takeover off with `-p take_canable:=false`.
 | `encoder_ids` | `[100, 199, 250, 299]` | `[first, last]` pairs of position feedback IDs (encoders, Smart Driver, Motor Controller) |
 | `speed_filter_alpha` | `0.0` | smoothing of the estimated speed (0 = raw) |
 | `sensor_input_ids` | `[500, 510]` | Sensor digital/analog frame IDs |
-| `swerve_feedback_ids` | `[0, -1]` (none) | V1 Swerve Controller feedback IDs |
 | `imu_id` | `1000` | IMU quaternion ID |
 | `log_rates` | `false` | log frames per second |
 | `superapp_link` | `true` | run DCLab Link for the Super App's Robot connection (see below) |
@@ -114,7 +113,6 @@ elsewhere. Turn it off with `-p superapp_link:=false`; without ROS, run it alone
 | `/encoder_feedback` | `EncoderFeedback` | from Smart Driver, Motor Controller, Sensor and Absolute Encoder |
 | `/digital_analog_feedback` | `DigitalAndAnalogFeedback` | from the Sensor board |
 | `/publish_pwm`, `/publish_servo`, `/publish_digital_solenoid` | Controller board | to the board |
-| `/publish_swerve`, `/swerve_feedback` | Swerve module | both |
 | `/imu/quaternion` | `geometry_msgs/Quaternion` | from the IMU board |
 | `/publish_vesc`, `/vesc_status1..4` | VESC | both |
 | `/publish_robomaster_current`, `/robomaster_feedback` | RoboMaster | both |
@@ -174,10 +172,13 @@ These formats apply to Smart Driver 2.13, Motor Controller 2.22, Sensor 2.7 and 
 
 These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older boards ignore the commands (no enable flag), and these boards ignore commands from older drivers, so update both together.
 
-**Unchanged from V1:** the Sensor digital/analog frame, the Controller PWM/servo/digital frames, the Swerve frames (V1 Swerve Controller only) and the IMU frame.
+**Unchanged from V1:** the Sensor digital/analog frame, the Controller PWM/servo/digital frames and the IMU frame. The V1 Swerve Controller frames are gone since 2.6.0.
 
 ## Changes from the January 2026 version
 
+- 2.6.0: removed the V1 Swerve Controller support (`/publish_swerve`, `/swerve_feedback`,
+  `swerve_feedback_ids`, `SwerveCommand`, `SwerveFeedback`) and the unused `RobomasterCommand` message. The V2
+  Motor Controller replaces the Swerve Controller and runs RoboMaster motors itself (`/dclab/motor_command`).
 - 2.5.2: DCLab Link 3.3 - fixes the robot window: its script never ran (a raw carriage return in a
   regular expression), so Connect only reloaded the form and the Super App waited. Update every robot.
 - 2.5.1: DCLab Link 3.2 - a refused robot login is shown clearly in the robot window and in the Super App, and names the

@@ -135,16 +135,6 @@ def controller_digital(digital, solenoid):
     return bytes(data)
 
 
-def swerve_command(position, speed):
-    """Swerve module target: steering position (rad), wheel speed (rad/s)."""
-    return struct.pack("<ff", float(position), float(speed))
-
-
-def swerve_feedback(data):
-    """Swerve module feedback: (position, speed)."""
-    return struct.unpack_from("<ff", bytes(data), 0)
-
-
 def imu_quaternion(data):
     """IMU board quaternion (w, x, y, z), sign-magnitude 16-bit each."""
     d = bytes(data)

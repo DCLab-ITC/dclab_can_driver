@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """Example publisher for bench tests: ros2 run can_driver test_can_driver
 --ros-args -p device:=motor (motor, motor_pair, motor_m2, controller,
-swerve, vesc, robomaster)."""
+vesc, robomaster)."""
 
 import rclpy
 from rclpy.node import Node
 
 from custom_messages.msg import (DCLabMotorCommand, DigitalAndSolenoidCommand, PwmCommand,
-                                 RobomasterCurrentCommand, ServoCommand, SwerveCommand,
-                                 VescCommand)
+                                 RobomasterCurrentCommand, ServoCommand, VescCommand)
 
 
 class TestCanDriver(Node):
@@ -20,7 +19,6 @@ class TestCanDriver(Node):
             "pwm": self.create_publisher(PwmCommand, "/publish_pwm", 10),
             "servo": self.create_publisher(ServoCommand, "/publish_servo", 10),
             "digital": self.create_publisher(DigitalAndSolenoidCommand, "/publish_digital_solenoid", 10),
-            "swerve": self.create_publisher(SwerveCommand, "/publish_swerve", 10),
             "vesc": self.create_publisher(VescCommand, "/publish_vesc", 10),
             "robomaster": self.create_publisher(RobomasterCurrentCommand, "/publish_robomaster_current", 10),
         }
@@ -51,9 +49,6 @@ class TestCanDriver(Node):
         self.pub["servo"].publish(ServoCommand(can_id=600, servo1_value=0.5, servo2_value=0.5,
                                                servo3_value=0.5, servo4_value=0.5))
         self.pub["digital"].publish(DigitalAndSolenoidCommand(can_id=600, solenoid1_value=True))
-
-    def send_swerve(self):
-        self.pub["swerve"].publish(SwerveCommand(can_id=201, position=1.57, speed=10.0))
 
     def send_vesc(self):
         self.pub["vesc"].publish(VescCommand(vesc_id=2, speed_mode=True, goal=1000.0))

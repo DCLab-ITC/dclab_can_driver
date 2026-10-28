@@ -22,7 +22,6 @@ from .DCLabSensorInputs import DCLabSensorInputs
 from .DCLabMotors import DCLabMotors
 from .IMUBoard import IMUBoard
 from .Robomaster import Robomaster
-from .SwerveModule import SwerveModule
 from .Vesc import Vesc
 
 
@@ -60,7 +59,7 @@ class CanDriver(Node, can.Listener):
 
         self.devices = [
             DCLabMotors(self), DCLabEncoders(self), DCLabSensorInputs(self),
-            ControllerBoard(self), SwerveModule(self), IMUBoard(self),
+            ControllerBoard(self), IMUBoard(self),
             Robomaster(self), Vesc(self),
         ]
         self.open_bus()

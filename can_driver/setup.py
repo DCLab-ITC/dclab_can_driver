@@ -4,7 +4,7 @@ package_name = "can_driver"
 
 setup(
     name=package_name,
-    version="2.5.2",
+    version="2.6.0",
     packages=[package_name],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
@@ -15,7 +15,7 @@ setup(
     maintainer="DCLab",
     maintainer_email="soubungit@gmail.com",
     description="ROS 2 CAN driver for DCLab boards (Smart Driver, Sensor, Controller, "
-                "Swerve, Absolute Encoder, IMU) and VESC and RoboMaster motors.",
+                "Absolute Encoder, IMU) and VESC and RoboMaster motors.",
     license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={

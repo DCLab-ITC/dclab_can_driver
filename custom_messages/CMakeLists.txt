@@ -24,7 +24,6 @@ set(msg_files
   "msg/DigitalAndSolenoidCommand.msg"
   "msg/EncoderFeedback.msg"
   "msg/PwmCommand.msg"
-  "msg/RobomasterCommand.msg"
   "msg/RobomasterCurrentCommand.msg"
   "msg/RobomasterFeedback.msg"
   "msg/ServoCommand.msg"
@@ -33,8 +32,6 @@ set(msg_files
   "msg/VescStatusTwo.msg"
   "msg/VescStatusThree.msg"
   "msg/VescStatusFour.msg"
-  "msg/SwerveCommand.msg"
-  "msg/SwerveFeedback.msg"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
