@@ -178,6 +178,8 @@ These formats need Smart Driver 2.13 and Motor Controller 2.22 or later. Older b
 
 ## Changes from the January 2026 version
 
+- 2.6.1: DCLab Link 3.4 - the robot window fills in the username the Super App saved for this robot
+  (Saved robot), so only the password is typed, and tells the Super App which account logged in.
 - 2.6.0: removed the V1 Swerve Controller support (`/publish_swerve`, `/swerve_feedback`,
   `swerve_feedback_ids`, `SwerveCommand`, `SwerveFeedback`) and the unused `RobomasterCommand` message. The V2
   Motor Controller replaces the Swerve Controller and runs RoboMaster motors itself (`/dclab/motor_command`).

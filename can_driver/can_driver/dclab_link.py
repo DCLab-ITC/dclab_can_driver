@@ -39,7 +39,7 @@ import sys
 import threading
 import time
 
-VERSION = "3.3"
+VERSION = "3.4"
 DEFAULT_ORIGINS = ("https://superapp-v2.dclab.live",)
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 CAN_FRAME = struct.Struct("=IB3x8s")
@@ -400,7 +400,7 @@ button{margin-top:14px;width:100%;padding:9px;border:0;border-radius:6px;backgro
 </main><script>
 "use strict";
 const ORIGINS = ORIGIN_LIST;
-let ws = null, ready = false, opener = null, login = null, retries = 0, connectedAt = 0, ended = null;
+let ws = null, ready = false, opener = null, login = null, retries = 0, connectedAt = 0, ended = null, acceptedUser = "", prefilled = false;
 const status = document.getElementById("status");
 const say = (text, bad) => { status.textContent = text; status.className = bad ? "bad" : ""; };
 const post = (message) => { if (opener) window.opener.postMessage(Object.assign({dclabLink: 1}, message), opener); };
@@ -410,7 +410,13 @@ window.addEventListener("message", (event) => {
   const m = event.data;
   if (!m || m.dclabLink !== 1) return;
   opener = event.origin;
-  if (m.type === "hello") post({type: ready ? "ready" : "waiting"});
+  if (m.type === "hello") {
+    /* the page's saved username for this robot: only the password is typed */
+    const user = document.getElementById("user");
+    if (!prefilled && typeof m.user === "string" && m.user && !user.value && !login) { user.value = m.user; document.getElementById("password").focus(); }
+    prefilled = true;
+    post(ready ? {type: "ready", user: acceptedUser} : {type: "waiting"});
+  }
   else if (m.type === "data" && ready && ws && ws.readyState === 1) ws.send(String(m.text));
   else if (m.type === "close") { ready = false; if (ws) ws.close(); window.close(); }
 });
@@ -437,11 +443,11 @@ function connect() {
         else post({type: "refused", message: reason});
         return;
       }
-      accepted = true; ready = true; ended = null; connectedAt = Date.now();
+      accepted = true; ready = true; ended = null; connectedAt = Date.now(); acceptedUser = login.user;
       document.getElementById("error").classList.add("hidden");
       document.getElementById("login").classList.add("hidden");
       say("Connected. Keep this window open (you can minimise it); closing it ends the link.");
-      post({type: "ready"});
+      post({type: "ready", user: acceptedUser});
       if (!text) return;
     }
     /* the relay's last word (taken over by another page, the adapter lost):
